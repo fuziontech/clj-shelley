@@ -173,3 +173,41 @@
   (testing "wrong verb and wrong depth do not match"
     (is (nil? (#'server/match-route :delete "/api/conversations")))
     (is (nil? (#'server/match-route :get "/api/conversations/a/b")))))
+
+;; ---------------------------------------------------------------------------
+;; Per-model routes
+;;
+;; A model the user added must reach its own endpoint with its own key and its
+;; own wire name. Getting this wrong is silent in the worst way: the request
+;; leaves for the gateway, the gateway answers "no such model", and the trace
+;; looks like a provider problem rather than a routing one.
+
+(deftest a-custom-model-routes-to-its-own-endpoint
+  (llm/clear-routes!)
+  (try
+    (llm/register-route! "acme/thing"
+                         {:provider :openai
+                          :base-url "https://acme.test"
+                          :api-key "secret-key"
+                          :wire-model "thing-v2"})
+    (let [seen (atom nil)]
+      (with-redefs [openai/send-request (fn [request _on-event]
+                                          (reset! seen request)
+                                          {:content [{:type :text :text "ok"}]
+                                           :stop-reason :stop :usage {}})]
+        (llm/complete {:model "acme/thing" :messages [{:role :user :content []}]}))
+      (testing "the wire name is what the provider sees"
+        (is (= "thing-v2" (:model @seen))))
+      (testing "the endpoint and key are the model's, not the gateway's"
+        (is (= "https://acme.test" (:base-url @seen)))
+        (is (= "secret-key" (:api-key @seen))))
+      (testing "provider dispatch follows the route, not the id"
+        (is (= :openai (:model-override-provider @seen)))))
+    (testing "a gateway model is untouched: no route, no rewrite"
+      (is (nil? (llm/route-for "anthropic/claude-sonnet-5-5"))))
+    (finally (llm/clear-routes!))))
+
+(deftest deleting-a-route-stops-rewriting
+  (llm/register-route! "acme/gone" {:base-url "https://gone.test" :wire-model "gone"})
+  (llm/unregister-route! "acme/gone")
+  (is (nil? (llm/route-for "acme/gone"))))

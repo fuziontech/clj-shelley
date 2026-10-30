@@ -100,6 +100,33 @@ reboot.
 The model comes from `CLJ_SHELLEY_MODEL` in the unit file, or from the settings
 panel (which wins, because it is a choice a person made).
 
+### Models: the gateway, and models of your own
+
+Two kinds of model work here, and the difference is one row in the `models`
+table:
+
+- **Gateway models** (`anthropic/claude-sonnet-5-5`, `openai/gpt-6.1-sol`) are
+  reached through the exe.dev LLM gateway, which routes by model id and needs no
+  key in the VM.
+- **Custom models** carry their own endpoint, key, and wire name. Adding one
+  (via `POST /api/custom-models` or the settings panel) registers a route, so
+  the id you store is what you ask for and `api.deepseek.com` is where the
+  request goes — the gateway never sees it.
+
+This instance is configured for **DeepSeek V4.1 Flash on DeepSeek's own platform
+API**, not a reseller:
+
+```
+model_id    deepseek-flash-api-deepseek-com
+endpoint    https://api.deepseek.com
+model_name  deepseek-flash          # what goes on the wire
+provider    openai                  # OpenAI-compatible chat completions
+```
+
+The key lives in the database, never in this repository. The route is rebuilt at
+startup and whenever a custom model changes, so editing the row is enough —
+nothing has to be restarted by hand if you go through the API.
+
 ## Tests
 
 ```bash

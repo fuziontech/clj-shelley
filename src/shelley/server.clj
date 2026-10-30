@@ -374,6 +374,9 @@
   ([] (start! (Integer/parseInt (or (System/getenv "PORT") "8000"))))
   ([port]
    (db/init!)
+   ;; Custom models reach their own endpoints with their own keys, so llm needs
+   ;; to know about them before the first turn runs.
+   (models/reload-model-routes!)
    ;; One hook for the whole process: SIGTERM from a restart must not leave
    ;; Chrome and MCP children behind.
    (.addShutdownHook (Runtime/getRuntime)

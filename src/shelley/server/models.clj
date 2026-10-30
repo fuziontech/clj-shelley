@@ -12,6 +12,7 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [shelley.db :as db]
+            [shelley.llm :as llm]
             [shelley.server.http :as http]
             [shelley.tools :as tools]
             [shelley.usage :as usage])
@@ -150,9 +151,16 @@
         (some #(when (= model-id (:id %)) %) builtin-models))))
 
 (defn context-window
+  "How many tokens this model can hold. A custom model knows its own limit, and
+  that is the number the context meter should use — the gateway catalogue has
+  never heard of it."
   ([model-id] (context-window model-id 200000))
   ([model-id default]
-   (or (:context_window (find-model model-id)) default)))
+   (or (when-let [m (db/get-model model-id)]
+         (let [n (or (:max-tokens m) (:max_tokens m))]
+           (when (and n (pos? (long n))) n)))
+       (:context_window (find-model model-id))
+       default)))
 
 (defn display-name [model-id]
   (or (:name (find-model model-id)) model-id))
@@ -169,7 +177,7 @@
   (or (not-empty (str (:model (db/get-setting :model))))
       (not-empty (str (System/getenv "CLJ_SHELLEY_MODEL")))
       (:preferred_model (catalogue))
-      "anthropic/claude-sonnet-5-5"))
+      "fireworks/deepseek-v4p1-flash-1017"))
 
 ;; ---------------------------------------------------------------------------
 ;; Custom models
@@ -205,6 +213,46 @@
     (:reasoning_map body) (assoc :reasoning-map (json/generate-string (:reasoning_map body)))
     (contains? body :reasoning_replay) (assoc :reasoning-replay (http/truthy? (:reasoning_replay body)))))
 
+;; ---------------------------------------------------------------------------
+;; Custom models → llm routes
+;;
+;; A model the user added has its own endpoint and key. Registering it with the
+;; llm layer is what makes an id like `deepseek-flash-api-deepseek-com` reach
+;; api.deepseek.com instead of the shared gateway.
+
+(def ^:private provider->llm
+  {"openai" :openai
+   "openai-responses" :openai-responses
+   "anthropic" :anthropic
+   "gemini" :gemini})
+
+(defn- bare-endpoint
+  "Endpoints are stored however the user typed them; the adapters append the
+  protocol path, so a trailing /v1 here would become /v1/v1."
+  [endpoint]
+  (-> (str endpoint)
+      (str/replace #"/+$" "")
+      (str/replace #"/v1$" "")))
+
+(defn reload-model-routes!
+  "Re-register every custom model with the llm layer."
+  []
+  (llm/clear-routes!)
+  (doseq [m (db/list-models)]
+    ;; The row carries snake_case keys as well as kebab ones, and the API key is
+    ;; only in the snake spelling — reading one spelling silently registered
+    ;; nothing and the turn went to the gateway instead.
+    (let [endpoint (bare-endpoint (:endpoint m))
+          key (or (:api-key m) (:api_key m))]
+      (when (and (not (str/blank? endpoint)) (not (str/blank? (str key))))
+        (llm/register-route! (:model-id m)
+                             (cond-> {:provider (get provider->llm (:provider-type m) :openai)
+                                      :base-url endpoint
+                                      :api-key key
+                                      :wire-model (or (not-empty (str (:model-name m)))
+                                                      (:model-id m))}
+                               (:max-tokens m) (assoc :max-tokens (:max-tokens m))))))))
+
 (defn handler-list-custom-models [_]
   (http/ok {"models" (mapv custom->api (db/list-models))}))
 
@@ -217,6 +265,7 @@
       (http/bad-request "id is required")
       (let [spec (merge {:model-id id} (api->custom body))]
         (db/save-model! spec)
+        (reload-model-routes!)
         (http/ok (custom->api (db/get-model id)))))))
 
 (defn handler-update-custom-model [req]
@@ -226,6 +275,7 @@
       (http/not-found "custom model not found")
       (let [body (http/parse-body req)]
         (db/save-model! (merge {:model-id id} (api->custom body)))
+        (reload-model-routes!)
         (http/ok (custom->api (db/get-model id)))))))
 
 (defn handler-delete-custom-model [req]
@@ -233,6 +283,7 @@
     (if (nil? (db/get-model id))
       (http/not-found "custom model not found")
       (do (db/delete-model! id)
+          (reload-model-routes!)
           (http/ok {"status" "deleted" "id" id})))))
 
 (defn handler-test-custom-model
@@ -385,8 +436,15 @@
     (http/ok (http/compact-map
               {"model" model
                "llm_calls" (count totalled)
-               "cost_usd" (reduce + 0.0 (map #(usage/cost % model) totalled))
+               "cost_usd" (usage/total-cost (map #(usage/cost % model) totalled))
+               "priced" (usage/priced? model)
                "usage" totalled}))))
+
+(defn- row->usage [u]
+  {:input-tokens (or (:input_tokens u) (:input-tokens u) 0)
+   :output-tokens (or (:output_tokens u) (:output-tokens u) 0)
+   :cache-read-tokens (or (:cache_read_tokens u) (:cache-read-tokens u) 0)
+   :cache-write-tokens (or (:cache_write_tokens u) (:cache-write-tokens u) 0)})
 
 (defn conversation-usage
   "Totals for one conversation, from the persisted `usage_data` on its rows."
@@ -401,12 +459,14 @@
                     (update a :output_tokens + (or (:output_tokens u) (:output-tokens u) 0))
                     (update a :cache_read_tokens + (or (:cache_read_tokens u) (:cache-read-tokens u) 0))
                     (update a :cache_write_tokens + (or (:cache_write_tokens u) (:cache-write-tokens u) 0))
-                    (update a :cost_usd + (or (:cost_usd u) (:cost-usd u)
-                                              (usage/cost {:input-tokens (or (:input_tokens u) (:input-tokens u) 0)
-                                                           :output-tokens (or (:output_tokens u) (:output-tokens u) 0)
-                                                           :cache-read-tokens (or (:cache_read_tokens u) (:cache-read-tokens u) 0)
-                                                           :cache-write-tokens (or (:cache_write_tokens u) (:cache-write-tokens u) 0)}
-                                                          (:model-name m)))))
+                    ;; A row from an unpriced model makes the total unknown, not
+                    ;; partial: a sum of the rows we happen to have prices for
+                    ;; would read as the whole cost of the conversation.
+                    (update a :cost_usd
+                            (fn [cur]
+                              (let [c (or (:cost_usd u) (:cost-usd u)
+                                          (usage/cost (row->usage u) (:model-name m)))]
+                                (when (and (some? cur) (some? c)) (+ cur c))))))
                   acc)))
             {:llm_calls 0 :input_tokens 0 :output_tokens 0 :cache_read_tokens 0
              :cache_write_tokens 0 :cost_usd 0.0}

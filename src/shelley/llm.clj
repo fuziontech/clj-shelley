@@ -192,6 +192,53 @@
 (def ^:dynamic *base-url*
   (or (System/getenv "LLM_BASE_URL") "https://llm-exe-proxy.int.exe.xyz"))
 
+;; ---------------------------------------------------------------------------
+;; Per-model routes
+;;
+;; Most models are reached through the exe.dev gateway, which routes by model id
+;; and needs no key. A model the user added themselves is different: it has its
+;; own endpoint, its own key, and often a different wire name than the id we
+;; store. The route registry is the one place that difference is applied, so
+;; the loop and every adapter can go on speaking in model ids.
+
+(defonce ^:private routes (atom {}))
+
+(defn register-route!
+  "Teach llm how to reach `model-id`.
+
+  Keys: :provider (:openai :openai-responses :anthropic :gemini),
+        :base-url (bare origin, no /v1), :api-key, :wire-model (the name the
+        provider expects), :max-tokens."
+  [model-id route]
+  (swap! routes assoc model-id route))
+
+(defn unregister-route! [model-id] (swap! routes dissoc model-id))
+(defn clear-routes! [] (reset! routes {}))
+
+(defn route-for [model-id] (get @routes model-id))
+
+(defn- apply-route
+  "Rewrite a request for a model with its own endpoint. Public models pass
+  through untouched."
+  [request]
+  (if-let [{:keys [provider base-url api-key wire-model]} (route-for (:model request))]
+    (cond-> (assoc request :wire-model (or wire-model (:model request)))
+      base-url (assoc :base-url base-url)
+      api-key (assoc :api-key api-key)
+      provider (assoc :model-override-provider provider))
+    request))
+
+(defn- provider-of [request]
+  (or (:model-override-provider request) (provider-for (:model request))))
+
+(defn- wire-request
+  "What the adapters see: the same request, with the model name the provider
+  expects and the endpoint that serves it."
+  [request]
+  (cond-> (assoc request :model (or (:wire-model request) (:model request)))
+    (and (route-for (:model request)) (:base-url request))
+    (assoc :base-url (:base-url request))))
+
 (defn base-url [] *base-url*)
 
 (defmulti send-request
@@ -199,7 +246,7 @@
   calls `on-event` with deltas as they arrive.
 
   Registered providers: :anthropic, :openai, :gemini, :predictable."
-  (fn [request _on-event] (provider-for (:model request))))
+  (fn [request _on-event] (provider-of request)))
 
 (defmethod send-request :openai [request on-event]
   ;; Reasoning models (gpt-5/6, o-series) refuse function tools on
@@ -227,7 +274,8 @@
   [{:keys [model on-event] :as request}]
   (if (nil? model)
     (throw (ex-info "no model configured (set CLJ_SHELLEY_MODEL)" {}))
-    (retrying #(send-request request on-event) (:on-retry request))))
+    (retrying #(send-request (wire-request (apply-route request)) on-event)
+              (:on-retry request))))
 
 ;; ---------------------------------------------------------------------------
 ;; Context accounting

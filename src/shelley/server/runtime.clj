@@ -26,8 +26,13 @@
             [clojure.string :as str]
             [org.httpkit.server :as http]))
 
+(def ^:private builtin-default-model
+  "DeepSeek V4.1 Flash 1017: cheap, fast, and it calls tools reliably through an
+  OpenAI-compatible wire format, which makes it the right first run for an agent."
+  "fireworks/deepseek-v4p1-flash-1017")
+
 (def default-model
-  (or (System/getenv "CLJ_SHELLEY_MODEL") "anthropic/claude-sonnet-5-5"))
+  (or (not-empty (str (System/getenv "CLJ_SHELLEY_MODEL"))) builtin-default-model))
 
 (def system-prompt
   (str "You are Shelley, a coding agent running on a Linux VM. You and the user share one "
