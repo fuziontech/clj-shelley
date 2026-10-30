@@ -73,6 +73,17 @@ LLM_BASE_URL=https://api.anthropic.com clojure -M:run serve 8000
 By default it talks to the exe.dev keyless gateway
 (`https://llm-exe-proxy.int.exe.xyz`), so no API key is needed on this VM.
 
+## Verifying it
+
+```bash
+scripts/e2e.sh 8000      # against a running server: one line per check
+```
+
+The script creates a conversation, makes the agent run a real command, and
+asserts the file it was told to write exists — an agent that answers plausibly
+without acting fails this. It then walks the workspace, model, settings and
+control endpoints. Its exit status is the number of failures.
+
 ## Tests
 
 ```bash
@@ -80,7 +91,7 @@ clojure -M:dev -e "(require 'shelley.core-test)(clojure.test/run-tests 'shelley.
 clojure -M:dev -e "(require 'shelley.loop-test)(clojure.test/run-tests 'shelley.loop-test)"
 ```
 
-They pin the bugs found while building this — content `:type` returning from
+94 tests / 666 assertions, plus a server suite. They pin the bugs found while building this — content `:type` returning from
 SQLite as a string (which silently sent empty messages), thinking blocks losing
 the signature Anthropic requires on replay, cancellation not actually stopping
 the loop, and string-keyed tool arguments.
