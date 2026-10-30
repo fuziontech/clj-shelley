@@ -136,9 +136,16 @@ offers no date-pinned model id — `/models` lists exactly `deepseek-flash` and
 `deepseek-v4-pro`, and any other name is refused with "the supported API model
 names are …".
 
-The key lives in the database, never in this repository. The route is rebuilt at
-startup and whenever a custom model changes, so editing the row is enough —
-nothing has to be restarted by hand if you go through the API.
+The `api_key` column for that row is the literal string `implicit`. On exe.dev
+the network edge injects provider credentials for outbound calls to
+`api.deepseek.com`, so no usable secret sits in the database or in this
+repository — the same convention as `ANTHROPIC_API_KEY=implicit` in the exe.dev
+docs. On a machine without that edge, put a real key in the column; the route
+sends whatever is there as a bearer token.
+
+The route is rebuilt at startup and whenever a custom model changes, so editing
+the row is enough — nothing has to be restarted by hand if you go through the
+API.
 
 ## Tests
 

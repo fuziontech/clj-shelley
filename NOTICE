@@ -1,0 +1,37 @@
+clj-shelley
+===========
+
+An independent Clojure implementation of the Shelley coding agent, written by
+porting the behaviour of https://github.com/boldsoftware/shelley.
+
+The code in src/, test/, resources/ui/ and resources/index.html is original.
+
+Two parts are derived from the upstream project, which is licensed under the
+Apache License 2.0, Copyright 2026 Bold Software, Inc.:
+
+1. resources/skills/*/SKILL.md — the five built-in agent skills, vendored
+   unchanged (see resources/skills/NOTICE.md).
+2. The HTTP surface, database schema history, tool contracts and hooks
+   protocol, which were written to match the upstream implementation so the
+   two behave alike. No upstream source files were copied for these.
+
+The upstream project's licence is reproduced below for those derived parts.
+
+--------------------------------------------------------------------------
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+Copyright 2026 Bold Software, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
