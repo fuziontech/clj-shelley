@@ -64,11 +64,15 @@
     (try
       (let [pb (ProcessBuilder. [(.getAbsolutePath (hook-file name))])
             _ (.directory pb (io/file (System/getProperty "user.dir")))
-            p (.start pb)]
+            p (.start pb)
+            ;; Capture the pipes before the hook can exit: once the process is
+            ;; reaped its streams are closed, and a fast hook hits that race.
+            in (.getInputStream p)
+            errs (.getErrorStream p)
+            out (future (slurp in))
+            err (future (slurp errs))]
         (write-input! p input)
-        (let [out (future (slurp (.getInputStream p)))
-              err (future (slurp (.getErrorStream p)))
-              done (.waitFor p *timeout-seconds* TimeUnit/SECONDS)]
+        (let [done (.waitFor p *timeout-seconds* TimeUnit/SECONDS)]
           (cond
             (not done) (do (.destroyForcibly p) {:ok false :error (str name " hook timed out")})
             (zero? (.exitValue p)) {:ok true :out @out}

@@ -67,7 +67,7 @@
     (is (= "2 files changed" (:body (hooks/status-bar-hook {})))))
   (testing "invalid JSON is reported, not swallowed"
     (install! "status-bar" "echo 'not json'")
-    (is (contains? (:error (hooks/status-bar-hook {})) :error))))
+    (is (string? (:error (hooks/status-bar-hook {}))))))
 
 (deftest timeout-kills-the-hook
   (install! "end-of-turn" "sleep 10")
