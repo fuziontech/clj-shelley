@@ -23,6 +23,7 @@ is the scoreboard for what has been ported and what has not.
 ```
 shelley.llm          internal block/message model, SSE transport, retry, dispatch
 shelley.llm.openai   OpenAI chat-completions adapter
+shelley.llm.openai_responses  OpenAI Responses adapter (reasoning models + tools)
 shelley.llm.anthropic Anthropic Messages adapter
 shelley.llm.gemini   Gemini generateContent adapter
 shelley.llm.fixture  deterministic provider for tests
@@ -30,7 +31,8 @@ shelley.loop         the agent loop
 shelley.compact      context compaction
 shelley.tools        tool registry and handlers
 shelley.db           append-only message store (SQLite, WAL)
-shelley.server       JSON API + SSE + UI host
+shelley.server       JSON API + SSE + UI host (138 routes, see API.md)
+shelley.btw          side conversations that do not pollute the transcript
 shelley.git          repository introspection
 shelley.usage        token and cost accounting
 shelley.terminal     pty sessions for the exec pane
@@ -83,6 +85,20 @@ The script creates a conversation, makes the agent run a real command, and
 asserts the file it was told to write exists — an agent that answers plausibly
 without acting fails this. It then walks the workspace, model, settings and
 control endpoints. Its exit status is the number of failures.
+
+## Running it on this machine
+
+```bash
+sudo systemctl start clj-shelley     # port 8000, log in ./server.log
+sudo systemctl status clj-shelley
+```
+
+Then open the UI. On exe.dev that is the VM's proxy URL for port 8000; locally it
+is <http://localhost:8000/>. The service restarts on failure and survives a
+reboot.
+
+The model comes from `CLJ_SHELLEY_MODEL` in the unit file, or from the settings
+panel (which wins, because it is a choice a person made).
 
 ## Tests
 
