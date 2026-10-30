@@ -13,12 +13,17 @@ pass=0; fail=0
 ok()   { printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=$((fail+1)); }
 
-check() { # name, expected-status, url
-  local name="$1" want="$2" url="$3" extra="${4:-}"
+check() { # name, expected-status, url, [method], [json-body]
+  local name="$1" want="$2" url="$3" method="${4:-GET}" body="${5:-}"
   local got
-  got=$(curl -s -o /tmp/e2e-body -w '%{http_code}' -m 15 -X "${5:-GET}" $extra "$url")
+  if [ -n "$body" ]; then
+    got=$(curl -s -o /tmp/e2e-body -w '%{http_code}' -m 20 -X "$method" \
+          -H 'content-type: application/json' -d "$body" "$url")
+  else
+    got=$(curl -s -o /tmp/e2e-body -w '%{http_code}' -m 20 -X "$method" "$url")
+  fi
   if [ "$got" = "$want" ]; then ok "$name ($got)"; else
-    bad "$name (want $want, got $got): $(head -c 200 /tmp/e2e-body)"; fi
+    bad "$name (want $want, got $got): $(head -c 300 /tmp/e2e-body)"; fi
 }
 
 jqf() { python3 -c "import json,sys;d=json.load(open('/tmp/e2e-body'));print($1)" 2>/dev/null; }
@@ -70,9 +75,9 @@ check "settings"           200 "$BASE/api/settings"
 
 if [ -n "${CID:-}" ]; then
   echo "== conversation controls"
-  check "archive"          200 "$BASE/api/conversation/$CID/archive" '{"archived":true}' POST
-  check "unarchive"        200 "$BASE/api/conversation/$CID/archive" '{"archived":false}' POST
-  check "cancel idle"      200 "$BASE/api/conversation/$CID/cancel" '' POST
+  check "archive"          200 "$BASE/api/conversation/$CID/archive" POST '{"archived":true}'
+  check "unarchive"        200 "$BASE/api/conversation/$CID/archive" POST '{"archived":false}'
+  check "cancel idle"      200 "$BASE/api/conversation/$CID/cancel" POST
 fi
 
 echo
