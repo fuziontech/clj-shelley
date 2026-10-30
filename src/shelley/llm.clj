@@ -125,7 +125,10 @@
              (java.io.InputStreamReader. (.body resp) java.nio.charset.StandardCharsets/UTF_8))]
     (when-not (<= 200 status 299)
       (let [txt (try (str/join "\n" (line-seq rdr)) (catch Exception _ ""))
-            retry-after (some-> (.firstValue (.headers resp) "retry-after")
+            ;; HttpHeaders.firstValue returns an Optional; without unwrapping,
+            ;; a provider error surfaces as a ClassCastException that hides the
+            ;; status and body the user needs to see.
+            retry-after (some-> (.orElse (.firstValue (.headers resp) "retry-after") nil)
                                 str/trim (parse-long))]
         (throw (ex-info (str "LLM HTTP " status ": " (subs txt 0 (min 800 (count txt))))
                         {:status status :body txt :url url :retry-after retry-after}))))

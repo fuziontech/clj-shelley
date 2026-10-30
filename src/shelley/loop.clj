@@ -21,6 +21,7 @@
     provider-side length error."
   (:require [shelley.llm :as llm]
             [shelley.tools :as tools]
+            [shelley.tools.compact :as compact]
             [clojure.tools.logging :as log]))
 
 (def max-iterations 100)
@@ -43,7 +44,9 @@
                           (emit {:type :tool-start :id (:id block) :name (:name block)
                                  :input (:input block)})
                           (let [started (System/currentTimeMillis)
-                                result (tools/execute ctx block)
+                                ;; Tools that rewrite context (compact_in_place)
+                                ;; need to see the conversation they are editing.
+                                result (tools/execute (assoc ctx :messages @(:history ctx)) block)
                                 elapsed (- (System/currentTimeMillis) started)]
                             (emit {:type :tool-end :id (:id block) :name (:name block)
                                    :is-error (:is-error result)
@@ -189,9 +192,20 @@
                      :messages @history
                      :usage (llm/usage-total @usage)
                      :stop-reason (:stop-reason resp)})
-                (let [results (execute-round ctx tool-uses emit)
-                      ;; A UI payload (iframe) is for the human, not the model.
-                      cleaned (mapv #(dissoc % :ui) results)
+                (let [results (execute-round (assoc ctx :history history) tool-uses emit)
+                      ;; A tool may hand the loop work to do — compaction is the
+                      ;; one case: the tool decides what to cut, the loop owns
+                      ;; the history, so the tool returns a directive and the
+                      ;; loop applies it here.
+                      _ (doseq [{:keys [compact]} (keep :directive results)]
+                          (when compact
+                            (when-let [apply-fn (:apply-compact ctx)]
+                              (apply-fn compact))
+                            (when (= :compact (:action compact))
+                              (swap! history compact/apply-directive compact))))
+                      ;; A UI payload (iframe) is for the human, not the model,
+                      ;; and a directive is for the loop, not the model.
+                      cleaned (mapv #(dissoc % :ui :directive) results)
                       tool-message {:role :user :content cleaned}]
                   (swap! history conj tool-message)
                   (when record! (record! tool-message))
