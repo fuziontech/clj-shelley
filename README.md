@@ -123,6 +123,13 @@ model_name  deepseek-flash          # what goes on the wire
 provider    openai                  # OpenAI-compatible chat completions
 ```
 
+`deepseek-flash` is the checkpoint, not just an alias: DeepSeek's own docs say
+"Use `deepseek-flash` as the model name. It is now served by
+**DeepSeek-V4.1-Flash-1017**" (https://api-docs.deepseek.com/). The platform
+offers no date-pinned model id — `/models` lists exactly `deepseek-flash` and
+`deepseek-v4-pro`, and any other name is refused with "the supported API model
+names are …".
+
 The key lives in the database, never in this repository. The route is rebuilt at
 startup and whenever a custom model changes, so editing the row is enough —
 nothing has to be restarted by hand if you go through the API.
