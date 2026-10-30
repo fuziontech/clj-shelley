@@ -78,6 +78,13 @@ if [ -n "${CID:-}" ]; then
   check "archive"          200 "$BASE/api/conversation/$CID/archive" POST '{"archived":true}'
   check "unarchive"        200 "$BASE/api/conversation/$CID/archive" POST '{"archived":false}'
   check "cancel idle"      200 "$BASE/api/conversation/$CID/cancel" POST
+  check "usage"            200 "$BASE/api/conversation/$CID/usage"
+  check "tags"             200 "$BASE/api/conversation/$CID/tags"
+  check "background jobs"  200 "$BASE/api/conversation/$CID/background-jobs"
+  check "btw"              200 "$BASE/api/conversation/$CID/btw"
+  curl -s -m 10 "$BASE/api/conversation/$CID/usage" -o /tmp/e2e-body
+  N=$(jqf "d['llm_calls']")
+  if [ "${N:-0}" -ge 1 ]; then ok "usage counted the calls ($N)"; else bad "usage reports $N calls"; fi
 fi
 
 echo

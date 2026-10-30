@@ -412,14 +412,22 @@
              :cache_write_tokens 0 :cost_usd 0.0}
             rows)))
 
-(defn handler-usage [req]
-  (let [conv-id (http/param req :conversation)
-        base (conversation-usage conv-id)
+(defn handler-usage
+  "GET /api/conversation/:id/usage — totals for one conversation.
+
+  The path parameter is `:id`; reading `:conversation` returned nil and the
+  endpoint answered zeros with `conversation_id: null`, which reads as
+  a free conversation rather than a missing one."
+  [req]
+  (let [conv-id (http/path-param req :id)
         conv (db/get-conversation conv-id)]
-    (http/ok (assoc base
-                    "conversation_id" conv-id
-                    "model" (:model conv)
-                    "context_window_size" (context-window (:model conv))))))
+    (if (nil? conv)
+      (http/not-found "conversation not found")
+      (let [base (conversation-usage conv-id)]
+        (http/ok (assoc base
+                        "conversation_id" conv-id
+                        "model" (:model conv)
+                        "context_window_size" (context-window (:model conv))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Tools
