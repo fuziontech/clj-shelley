@@ -1292,7 +1292,11 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
       num(u.cache_creation_input_tokens, u["cache-write-tokens"], u.cache_write);
     const cost = num(u.cost_usd, u["cost-usd"], u.cost, u.total_cost, u.costUSD);
     const recorded = input + output + cached + cost > 0;
-    const contextTokens = num(u.context_tokens, u.contextTokens, u.context, meta.estimated, input + output) || 0;
+    // A server-side estimate of 0 is "unknown", not "empty": fall through to the
+    // tokens we actually counted, or the meter reads ctx 0 beside 8.3k in.
+    const contextTokens = num(u.context_tokens, u.contextTokens, u.context)
+      || num(meta.estimated)
+      || (input + output);
     const modelRow = S.models.find((m) => m.id === S.model) || {};
     const contextLimit = num(u.context_limit, u.contextLimit, u.max_context_tokens, modelRow.max_context_tokens) || 0;
     const calls = num(u.llm_calls, u.calls, u.request_count, u["llm-calls"]) || 0;
