@@ -118,8 +118,8 @@ wins — and the row is a bug.
 | User hooks (`~/.config/shelley/hooks/*`) | 5 hooks, stdin/stdout | done |
 | Agent Skills discovery + prompt listing | `skills/` | done |
 | CLI: serve/run | yes | done |
-| CLI: upgrade, db lock, highlights, exescroll | yes | partial (db lock, skill, hooks) |
-| Persistent dtach terminals | yes | todo |
-| Sandboxing of tool execution | yes | partial (opt-in bwrap, `SHELLEY_SANDBOX=1`) |
-| Slack / channel integrations | yes | partial (webhook out, signed events in, exe.dev notify) |
+| CLI: upgrade, db lock, highlights, exescroll | yes | partial (lock, skill, hooks, models, port-file) |
+| Persistent terminals (dtach) | yes | done (tmux: survives the client, replays scrollback) |
+| Sandboxing of tool execution | yes | done (opt-in bwrap, `SHELLEY_SANDBOX=1`) |
+| Slack / channel integrations | yes | partial (webhook out, signed events in, exe.dev notify; not routed) |
 | Docker/container harness | yes | todo |
