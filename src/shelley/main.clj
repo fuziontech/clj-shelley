@@ -7,6 +7,7 @@
             [shelley.tools :as tools]
             [shelley.llm :as llm]
             [shelley.skills :as skills]
+            [shelley.hooks :as hooks]
             [clojure.string :as str]))
 
 (defn- print-event [e]
@@ -36,8 +37,11 @@
              :base-url (llm/base-url)}
         result (loop/run-turn
                 {:model server/default-model
-                 :system (cond-> [server/system-prompt (str "Working directory: " @cwd)]
-                           (skills/prompt-section) (conj (skills/prompt-section)))
+                 :system (hooks/system-prompt-hook
+                          (str/join "\n\n"
+                                    (cond-> [server/system-prompt
+                                             (str "Working directory: " @cwd)]
+                                      (skills/prompt-section) (conj (skills/prompt-section)))))
                  :messages [(llm/user-message prompt)]
                  :tools (tools/tool-defs nil)
                  :ctx ctx
