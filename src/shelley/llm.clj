@@ -22,7 +22,8 @@
 
   A completed response is:
     {:content [block] :stop-reason kw :usage {...} :model string}"
-  (:require [cheshire.core :as json]))
+  (:require [cheshire.core :as json]
+            [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
 ;; Content helpers
@@ -123,9 +124,11 @@
         rdr (java.io.BufferedReader.
              (java.io.InputStreamReader. (.body resp) java.nio.charset.StandardCharsets/UTF_8))]
     (when-not (<= 200 status 299)
-      (let [txt (try (clojure.string/join "\n" (line-seq rdr)) (catch Exception _ ""))]
+      (let [txt (try (str/join "\n" (line-seq rdr)) (catch Exception _ ""))
+            retry-after (some-> (.firstValue (.headers resp) "retry-after")
+                                str/trim (parse-long))]
         (throw (ex-info (str "LLM HTTP " status ": " (subs txt 0 (min 800 (count txt))))
-                        {:status status :body txt :url url}))))
+                        {:status status :body txt :url url :retry-after retry-after}))))
     (sse-data-lines rdr)))
 
 (defn stream-json
@@ -143,8 +146,10 @@
       (when-let [s (:status (ex-data e))]
         (or (= 429 s) (<= 500 s 599) (= 408 s)))))
 
-(defn- backoff-ms [attempt]
-  (min 15000 (* 1000 (long (Math/pow 2 attempt)))))
+(defn- backoff-ms [attempt retry-after]
+  (if retry-after
+    (min 60000 (* 1000 (long retry-after)))
+    (min 15000 (* 1000 (long (Math/pow 2 attempt))))))
 
 (defn retrying
   "Call `f` (which must return a fully-consumed result) retrying transient
@@ -162,7 +167,7 @@
        (if (or (:ok result) (>= attempt max-attempts))
          (if (:ok result) (:ok result) (throw (:err result)))
          (do (when on-retry (on-retry attempt (:err result)))
-             (Thread/sleep (backoff-ms attempt))
+             (Thread/sleep (backoff-ms attempt (:retry-after (ex-data (:err result)))))
              (recur (inc attempt))))))))
 
 ;; ---------------------------------------------------------------------------
@@ -171,11 +176,14 @@
 (defn provider-for
   "Pick a wire protocol from the model id.
 
-  Claude models talk the Anthropic wire format; everything else on the gateway
-  speaks OpenAI chat completions."
+  Claude models talk the Anthropic wire format; predictable is the in-process
+  fixture used by tests; everything else on the gateway speaks OpenAI chat
+  completions."
   [model]
   (cond
+    (str/starts-with? (str model) "predictable/") :predictable
     (re-find #"(?i)claude" (str model)) :anthropic
+    (re-find #"(?i)gemini" (str model)) :gemini
     :else :openai))
 
 (def ^:dynamic *base-url*
@@ -183,16 +191,74 @@
 
 (defn base-url [] *base-url*)
 
+(defmulti send-request
+  "Stream one request through a provider. Returns a completed response map and
+  calls `on-event` with deltas as they arrive.
+
+  Registered providers: :anthropic, :openai, :gemini, :predictable."
+  (fn [request _on-event] (provider-for (:model request))))
+
+(defmethod send-request :openai [request on-event]
+  ((requiring-resolve 'shelley.llm.openai/send-request) request on-event))
+
+(defmethod send-request :anthropic [request on-event]
+  ((requiring-resolve 'shelley.llm.anthropic/send-request) request on-event))
+
+(defmethod send-request :gemini [request on-event]
+  ((requiring-resolve 'shelley.llm.gemini/send-request) request on-event))
+
+(defmethod send-request :predictable [request on-event]
+  ((requiring-resolve 'shelley.llm.fixture/send-request) request on-event))
+
 (defn complete
   "Send one request and return a completed response map.
 
   opts: :model :system (vector of strings) :messages :tools
-        :max-tokens :temperature :on-event (fn [event])
-        :api-key :base-url :on-retry"
+        :max-tokens :temperature :thinking-level :prompt-caching
+        :on-event (fn [event]) :api-key :base-url :on-retry"
   [{:keys [model on-event] :as request}]
   (if (nil? model)
-    (throw (ex-info "no model configured (set SHELLEY_MODEL)" {}))
-    (let [send (case (provider-for model)
-                 :anthropic (requiring-resolve 'shelley.llm.anthropic/send-request)
-                 :openai    (requiring-resolve 'shelley.llm.openai/send-request))]
-      (retrying #(send request on-event) (:on-retry request)))))
+    (throw (ex-info "no model configured (set CLJ_SHELLEY_MODEL)" {}))
+    (retrying #(send-request request on-event) (:on-retry request))))
+
+;; ---------------------------------------------------------------------------
+;; Context accounting
+
+(defn estimate-tokens
+  "Rough token count for a message vector, for deciding when to compact.
+
+  Character-based with a per-block overhead, which tracks real tokenizers well
+  enough for a threshold and costs nothing. Shared with the UI's context bar."
+  [messages]
+  (reduce
+   (fn [total {:keys [content]}]
+     (+ total
+        (reduce (fn [n block]
+                  (+ n (case (:type block)
+                         :text (long (Math/ceil (/ (+ 4 (count (str (:text block)))) 4.0)))
+                         :thinking (long (Math/ceil (/ (count (str (:thinking block))) 6.0)))
+                         :tool-use (+ 12 (long (Math/ceil (/ (count (pr-str (:input block))) 4.0))))
+                         :tool-result (estimate-tokens [{:content (:content block)}])
+                         :image 1600  ; a picture costs roughly this much
+                         8)))
+                0 content)))
+   0 messages))
+
+(defn usage-total
+  "Fold per-call usage maps into one. Missing keys are treated as zero."
+  [usages]
+  (reduce (fn [acc u]
+            (merge-with (fn [a b] (+ (or a 0) (or b 0)))
+                        acc
+                        (select-keys (or u {}) [:input-tokens :output-tokens :cache-read-tokens
+                                                :cache-write-tokens])))
+          {:input-tokens 0 :output-tokens 0 :cache-read-tokens 0 :cache-write-tokens 0}
+          usages))
+
+(def thinking-budgets
+  "Thinking levels map to provider budgets. `nil` means do not send a thinking
+  parameter at all, which is what most models want."
+  {:off nil :minimal nil :low 4000 :medium 8000 :high 16000 :xhigh 32000 :max 64000})
+
+(defn thinking-budget [level]
+  (thinking-budgets (or level :off)))

@@ -35,7 +35,29 @@
   {:role (name role)
    :content (vec (keep block->wire content))})
 
-(defn- build-body [{:keys [model system messages tools max-tokens temperature]}]
+(defn- add-cache-control
+  "Prompt caching: mark the end of the stable prefix (the last tool and the last
+  user turn) so the provider can reuse everything before it. This is the single
+  largest cost lever on a long agent conversation."
+  [body]
+  (let [msgs (:messages body)
+        last-user (last (keep-indexed (fn [i m] (when (= "user" (:role m)) i)) msgs))]
+    (cond-> body
+      (seq (:tools body))
+      (assoc :tools (update (:tools body) (dec (count (:tools body)))
+                            #(assoc % :cache_control {:type "ephemeral"})))
+
+      (some? last-user)
+      (assoc :messages
+             (update msgs last-user
+                     (fn [m]
+                       (if (seq (:content m))
+                         (update m :content (fn [c] (update c (dec (count c))
+                                                            #(assoc % :cache_control {:type "ephemeral"}))))
+                         m)))))))
+
+(defn- build-body [{:keys [model system messages tools max-tokens temperature
+                           thinking-level prompt-caching]}]
   (cond-> {:model model
            :max_tokens (or max-tokens 32000)
            :stream true
@@ -45,7 +67,11 @@
                                             :description (:description t)
                                             :input_schema (:input-schema t)})
                                     tools))
-    temperature (assoc :temperature temperature)))
+    (and temperature (not (llm/thinking-budget thinking-level))) (assoc :temperature temperature)
+    (llm/thinking-budget thinking-level)
+    (assoc :thinking {:type "enabled" :budget_tokens (llm/thinking-budget thinking-level)})))
+
+(def ^:private default-max-tokens 32000)
 
 (defn- stop->reason [stop]
   (case stop

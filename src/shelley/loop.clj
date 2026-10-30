@@ -5,16 +5,31 @@
   results back, repeat until it stops asking for tools. That is the whole
   agent. Everything else in this repository exists to serve this loop:
   persistence to survive a crash mid-turn, streaming so the user sees progress,
-  and cancellation so a runaway turn can be stopped.
+  cancellation so a runaway turn can be stopped.
 
   Tool execution is parallel within a round — the model frequently emits three
-  independent bash calls, and serialising them wastes wall-clock time."
+  independent bash calls, and serialising them wastes wall-clock time.
+
+  Three things make a long-running turn behave like the original's:
+
+  * **queue** — user messages typed while the agent is working are spliced in
+    before the next request rather than waiting for the turn to end;
+  * **inject** — a function called between rounds, used to splice subagent
+    completion notices into the conversation as soon as they happen;
+  * **compaction** — when the context estimate crosses the limit, older
+    messages collapse into a summary instead of the turn failing on a
+    provider-side length error."
   (:require [shelley.llm :as llm]
             [shelley.tools :as tools]
-            [clojure.string :as str]
             [clojure.tools.logging :as log]))
 
 (def max-iterations 100)
+
+(def ^:private compaction-threshold
+  "Compact when the estimate reaches this fraction of the limit. Leaving
+  headroom matters: the estimate is approximate and one tool result can be
+  large."
+  0.8)
 
 ;; ---------------------------------------------------------------------------
 ;; Tool execution
@@ -59,6 +74,41 @@
     messages))
 
 ;; ---------------------------------------------------------------------------
+;; Between-round inputs
+
+(defn- drain-queue!
+  "Take any user messages queued during this turn. Returns messages to append."
+  [queue]
+  (when queue
+    (let [pending @queue]
+      (reset! queue [])
+      (mapv llm/user-message pending))))
+
+(defn- injected-messages
+  "Messages a hook wants spliced in before the next request."
+  [inject]
+  (when inject
+    (let [r (inject)]
+      (cond (nil? r) []
+            (map? r) [r]
+            :else (vec r)))))
+
+(defn- maybe-compact!
+  "Collapse history when it approaches the model's limit. `compact-fn` receives
+  the message vector and returns a shorter one; it must preserve the last turn."
+  [history context-limit compact-fn emit]
+  (when (and context-limit compact-fn)
+    (let [estimate (llm/estimate-tokens @history)]
+      (when (> estimate (* compaction-threshold context-limit))
+        (emit {:type :compaction-start :estimated-tokens estimate})
+        (let [before (count @history)
+              compacted (compact-fn @history)]
+          (reset! history compacted)
+          (emit {:type :compaction-end
+                 :messages-before before
+                 :messages-after (count compacted)}))))))
+
+;; ---------------------------------------------------------------------------
 ;; Turn
 
 (defn run-turn
@@ -66,20 +116,31 @@
 
   opts:
     :model        model id
-    :system       vector of system strings
+    :system       vector of system strings, or a fn of no args returning them
     :messages     conversation history (vector of messages)
     :tools        tool definitions (from shelley.tools/tool-defs)
     :ctx          tool execution context
     :emit         (fn [event]) — streaming and tool events for the UI
-    :record!      (fn [message]) — persist an assistant/user message
-    :cancel       (promise-like atom; when true the turn aborts)
+    :record!      (fn [message]) — persist a message
+    :record-error! (fn [message]) — persist a failed-turn error row
+    :cancelled?   (fn [] boolean)
+    :queue        atom holding queued user message strings
+    :inject       (fn [] message | [messages] | nil), called between rounds
+    :compact-fn   (fn [messages] -> messages)
+    :context-limit token budget for the model
+    :thinking-level  :off :low :medium :high :xhigh :max
+    :max-tokens   per-response cap
 
-  Returns {:messages [...] :status :complete|:cancelled|:error :error msg}."
-  [{:keys [model system messages tools ctx emit record! cancelled? max-tokens]
+  Returns {:messages [...] :status :complete|:cancelled|:error :error msg
+           :usage {...}}."
+  [{:keys [model system messages tools ctx emit record! record-error! cancelled?
+           queue inject compact-fn context-limit thinking-level max-tokens]
     :or {max-tokens 32000}}]
   (let [history (atom (vec messages))
         emit (or emit (fn [_]))
-        cancelled? (or cancelled? (constantly false))]
+        cancelled? (or cancelled? (constantly false))
+        usage (atom [])
+        system-fn (if (fn? system) system (constantly system))]
     (try
       (loop [iteration 0]
         (cond
@@ -88,42 +149,65 @@
 
           (cancelled?)
           (do (emit {:type :turn-end :status :cancelled})
-              {:status :cancelled :messages @history})
+              {:status :cancelled :messages @history :usage (llm/usage-total @usage)})
 
           :else
-          (let [request {:model model
-                         :system system
-                       :messages (ensure-tool-results @history)
-                       :tools tools
-                       :max-tokens max-tokens
-                       :on-event (fn [event]
-                                   (when (and (not= :thinking-delta (:type event))
-                                              (not (cancelled?)))
-                                     (emit event)))
-                       :on-retry (fn [attempt e]
-                                   (emit {:type :warning
-                                          :text (str "retrying after error: "
-                                                     (.getMessage ^Throwable e)
-                                                     " (attempt " (inc attempt) ")")}))}
-              resp (llm/complete request)
-              assistant {:role :assistant :content (:content resp)}
-              tool-uses (llm/tool-uses assistant)]
-          (swap! history conj assistant)
-          (when record! (record! assistant))
+          (do
+            ;; Inputs that arrived while the previous round was running.
+            (doseq [m (injected-messages inject)] (swap! history conj m))
+            (doseq [m (drain-queue! queue)]
+              (swap! history conj m)
+              (when record! (record! m)))
 
-          (if (empty? tool-uses)
-            (do (emit {:type :turn-end :status :complete :usage (:usage resp)})
-                {:status :complete :messages @history :usage (:usage resp)})
-            (let [results (execute-round ctx tool-uses emit)
-                  ;; A UI payload (iframe) is for the human, not the model.
-                  cleaned (mapv #(dissoc % :ui) results)
-                  tool-message {:role :user :content cleaned}]
-              (swap! history conj tool-message)
-              (when record! (record! tool-message))
-              (recur (inc iteration)))))))
+            (maybe-compact! history context-limit compact-fn emit)
+
+            (let [request {:model model
+                           :system (system-fn)
+                           :messages (ensure-tool-results @history)
+                           :tools tools
+                           :max-tokens max-tokens
+                           :thinking-level thinking-level
+                           :on-event (fn [event]
+                                       (when (and (not= :thinking-delta (:type event))
+                                                  (not (cancelled?)))
+                                         (emit event)))
+                           :on-retry (fn [attempt e]
+                                       (emit {:type :warning
+                                              :text (str "retrying after error: "
+                                                         (.getMessage ^Throwable e)
+                                                         " (attempt " (inc attempt) ")")}))}
+                  resp (llm/complete request)
+                  assistant {:role :assistant :content (:content resp)}
+                  tool-uses (llm/tool-uses assistant)]
+              (swap! usage conj (:usage resp))
+              (swap! history conj assistant)
+              (when record! (record! (assoc assistant :usage (:usage resp))))
+
+              (if (empty? tool-uses)
+                (do (emit {:type :turn-end :status :complete :usage (:usage resp)})
+                    {:status :complete
+                     :messages @history
+                     :usage (llm/usage-total @usage)
+                     :stop-reason (:stop-reason resp)})
+                (let [results (execute-round ctx tool-uses emit)
+                      ;; A UI payload (iframe) is for the human, not the model.
+                      cleaned (mapv #(dissoc % :ui) results)
+                      tool-message {:role :user :content cleaned}]
+                  (swap! history conj tool-message)
+                  (when record! (record! tool-message))
+                  (recur (inc iteration))))))))
       (catch Exception e
-        (let [msg (.getMessage e)]
-          (emit {:type :error :text msg})
+        (let [msg (.getMessage e)
+              retryable (llm/retryable? e)
+              error-message {:role :assistant
+                             :content [(llm/text-block (str "The request failed: " msg))]
+                             :error {:type :llm-request :retryable retryable}}]
+          (emit {:type :error :text msg :retryable retryable})
           (emit {:type :turn-end :status :error})
           (log/warn e "turn failed")
-          {:status :error :error msg :messages @history})))))
+          (when record-error!
+            (try (record-error! error-message)
+                 (catch Exception persist-failure
+                   (log/warn persist-failure "could not persist error row"))))
+          {:status :error :error msg :messages @history
+           :usage (llm/usage-total @usage)})))))

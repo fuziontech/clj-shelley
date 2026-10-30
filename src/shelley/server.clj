@@ -2,7 +2,8 @@
   "HTTP surface: a small JSON API, an SSE event stream per conversation, and one
   static page. No framework — the whole UI is a single file that speaks JSON
   and EventSource."
-  (:require [org.httpkit.server :as http]
+  (:require [shelley.compact :as compact]
+            [org.httpkit.server :as http]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -33,6 +34,7 @@
                                   (System/getProperty "user.dir")))
                    :cancelled? (atom false)
                    :running? (atom false)
+                   :queue (atom [])
                    :subs (atom #{})}]
         (swap! state assoc-in [:conversations id] fresh)
         fresh)))
@@ -105,19 +107,31 @@
              :emit (fn [e] (emit-event! conv-id e))
              :base-url (llm/base-url)
              :run-subagent run-subagent}
+        model (or (:model conversation) default-model)
         result (try
-                 (loop/run-turn {:model (or (:model conversation) default-model)
+                 (loop/run-turn {:model model
                                  :system [system-prompt
                                           (str "Working directory: " @(:cwd st))]
                                  :messages history
                                  :tools (tools/tool-defs toolset)
                                  :ctx ctx
                                  :emit (:emit ctx)
+                                 :thinking-level (:reasoning_effort conversation)
+                                 :context-limit 200000
+                                 :compact-fn (fn [msgs]
+                                               (compact/compact-history msgs {:model model}))
                                  :cancelled? #(boolean @(:cancelled? st))
+                                 :queue (:queue st)
                                  :record! (fn [m]
                                             (db/append-message! {:conversation-id conv-id
                                                                  :role (:role m)
-                                                                 :content (:content m)}))})
+                                                                 :content (:content m)
+                                                                 :usage (:usage m)}))
+                                 :record-error! (fn [m]
+                                                  (db/append-message! {:conversation-id conv-id
+                                                                       :role :assistant
+                                                                       :content (:content m)
+                                                                       :error (:error m)}))})
                  (finally (reset! (:running? st) false)))]
     (when (and text (nil? (:title conversation)))
       (db/touch! conv-id (subs text 0 (min 80 (count text)))))
@@ -170,10 +184,15 @@
         {:keys [text]} (parse-body req)]
     (if-not conv
       (json-response 404 {:error "not found"})
-      (if @(:running? (conv-state id))
-        (json-response 409 {:error "a turn is already running"})
-        (do (run-in-background id #(run-agent-turn {:conversation conv :text text}))
-            (json-response 202 {:status "accepted"}))))))
+      (let [st (conv-state id)]
+        (if @(:running? st)
+          ;; The turn is already running: splice this in before its next
+          ;; request rather than refusing it.
+          (do (swap! (:queue st) conj text)
+              (emit-event! id {:type :queued :text text})
+              (json-response 202 {:status "queued"}))
+          (do (run-in-background id #(run-agent-turn {:conversation conv :text text}))
+              (json-response 202 {:status "accepted"})))))))
 
 (defn cancel [req]
   (let [id (:id (:params req))]
