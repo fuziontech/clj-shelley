@@ -49,9 +49,11 @@
             results (filter #(= :tool-result (:type %)) content)
             images (filter #(= :image (:type %)) content)]
         (concat
-         ;; A message item carries text; a tool call or result is its own item.
-         (when (seq texts)
-           [{:role (if (= role :agent) "assistant" role)
+         ;; A message item carries text and images; a tool call or result is its
+         ;; own item. An image-only message must still produce an item, or the
+         ;; model never sees the screenshot it was asked about.
+         (when (or (seq texts) (seq images))
+           [{:role (if (= role :agent) "assistant" (name role))
              :content (vec (concat
                             (map (fn [b] {:type (if (= role :agent) "output_text" "input_text")
                                           :text (:text b)}) texts)
