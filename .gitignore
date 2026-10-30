@@ -1,0 +1,5 @@
+.cpcache/
+.clj-shelley/
+target/
+*.log
+server.log

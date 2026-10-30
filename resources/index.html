@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>clj-shelley</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9A%3C/text%3E%3C/svg%3E">
+<style>
+/* ------------------------------------------------------------------ theme */
+:root, :root[data-theme="dark"] {
+  --bg: #0f1115; --panel: #161a21; --panel-2: #1d232c; --panel-3: #232b36;
+  --line: #2a323d; --line-soft: #222a34;
+  --fg: #d7dee8; --fg-strong: #f2f6fb; --dim: #8b95a5; --dim-2: #67707e;
+  --accent: #7cc4ff; --accent-dim: #2c4a63; --ok: #66d19e; --warn: #e3b341; --err: #ff7b72;
+  --user-bubble: #1b2734; --code-bg: #11161d; --diff-add: #16301f; --diff-del: #3a1d1d;
+  --diff-add-fg: #7ee2a8; --diff-del-fg: #ff9d95;
+  --shadow: 0 18px 60px rgba(0,0,0,.55);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="light"] {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --panel-3: #e6e9ee;
+  --line: #d8dde5; --line-soft: #e7ebf1;
+  --fg: #26303c; --fg-strong: #0d1218; --dim: #5d6876; --dim-2: #8b95a5;
+  --accent: #1f6feb; --accent-dim: #cfe3ff; --ok: #1a7f4b; --warn: #9a6700; --err: #cf222e;
+  --user-bubble: #eef3fb; --code-bg: #f4f6f9; --diff-add: #e6ffec; --diff-del: #ffebe9;
+  --diff-add-fg: #116329; --diff-del-fg: #a40e26;
+  --shadow: 0 18px 60px rgba(20,30,45,.18);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased; overflow: hidden;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+.mono { font-family: var(--mono); }
+.dim { color: var(--dim); }
+.hidden { display: none !important; }
+.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row { display: flex; align-items: center; gap: 8px; }
+.spacer { flex: 1; }
+
+/* ------------------------------------------------------------------ shell */
+#app { height: 100vh; height: 100dvh; }
+.shell { display: grid; grid-template-columns: 292px minmax(0, 1fr); height: 100%; }
+.shell.drawer-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+@media (max-width: 860px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------------------------ drawer */
+.drawer {
+  display: flex; flex-direction: column; min-width: 0; background: var(--panel);
+  border-right: 1px solid var(--line); overflow: hidden;
+}
+.shell.drawer-collapsed .drawer { border-right: 0; }
+@media (max-width: 860px) {
+  .drawer {
+    position: fixed; inset: 0 auto 0 0; width: 292px; z-index: 40;
+    transform: translateX(-100%); transition: transform .18s ease; box-shadow: var(--shadow);
+  }
+  .drawer.open { transform: translateX(0); }
+}
+.drawer-head { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; }
+.drawer-title { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--dim); font-weight: 700; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--fg);
+  border-radius: 8px; padding: 7px 10px; font-size: 13px; transition: border-color .12s, background .12s;
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { border-color: var(--accent); color: var(--accent); background: transparent; }
+.btn.danger { border-color: var(--err); color: var(--err); background: transparent; }
+.btn.icon { padding: 5px 8px; font-size: 14px; line-height: 1; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--dim); }
+.btn.ghost:hover { color: var(--fg); background: var(--panel-2); border-color: transparent; }
+.btn.sm { padding: 3px 7px; font-size: 12px; border-radius: 6px; }
+.btn.full { width: 100%; }
+input[type="text"], input[type="search"], input[type="password"], input[type="number"], select, textarea {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 10px; outline: none; min-width: 0;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+.searchbox { position: relative; }
+.searchbox input { width: 100%; padding-left: 28px; }
+.searchbox .ico { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--dim); font-size: 12px; }
+
+.conv-list { flex: 1; overflow-y: auto; padding: 4px 0 24px; overscroll-behavior: contain; }
+.conv-group-label { padding: 12px 14px 4px; font-size: 11px; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--dim-2); }
+.conv {
+  position: relative; padding: 8px 12px 9px; cursor: pointer; border-left: 2px solid transparent;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.conv:hover { background: var(--panel-2); }
+.conv.active { border-left-color: var(--accent); background: var(--panel-2); }
+.conv.sub { padding-left: 26px; }
+.conv.sub::before { content: "└"; position: absolute; left: 13px; color: var(--dim-2); font-size: 11px; top: 9px; }
+.conv-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.conv-title { font-size: 13.5px; font-weight: 600; color: var(--fg); flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-preview { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.conv-time { font-size: 11px; color: var(--dim-2); font-variant-numeric: tabular-nums; }
+.conv-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.tag { font-size: 10px; padding: 1px 6px; border-radius: 20px; border: 1px solid var(--line);
+  color: var(--dim); background: var(--panel-3); }
+.tag.active { color: var(--accent); border-color: var(--accent-dim); }
+.conv-actions { position: absolute; right: 6px; top: 6px; display: none; gap: 2px; background: var(--panel-2);
+  border-radius: 6px; padding: 1px; }
+.conv:hover .conv-actions { display: flex; }
+.spinner { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--accent-dim);
+  border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.drawer-foot { border-top: 1px solid var(--line); padding: 8px; display: flex; gap: 6px; align-items: center; }
+
+/* ------------------------------------------------------------------ main */
+main { display: flex; flex-direction: column; min-width: 0; height: 100%; background: var(--bg); }
+.topbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+  background: var(--panel); min-height: 48px; }
+.topbar .title { font-weight: 650; font-size: 14px; }
+.topbar .crumb { color: var(--dim); font-size: 12px; font-family: var(--mono); }
+.usage-bar { display: flex; align-items: center; gap: 12px; padding: 5px 14px; font-size: 11.5px;
+  color: var(--dim); border-bottom: 1px solid var(--line-soft); background: var(--panel);
+  font-family: var(--mono); overflow-x: auto; white-space: nowrap; }
+.usage-bar b { color: var(--fg); font-weight: 600; }
+.ctx-meter { width: 74px; height: 5px; border-radius: 3px; background: var(--panel-3); overflow: hidden; flex: none; }
+.ctx-meter > i { display: block; height: 100%; background: var(--ok); }
+.ctx-meter.warn > i { background: var(--warn); }
+.ctx-meter.hot > i { background: var(--err); }
+
+.log { flex: 1; overflow-y: auto; padding: 22px 22px 8px; scroll-behavior: smooth; overscroll-behavior: contain; }
+.log-inner { max-width: 900px; margin: 0 auto; }
+.empty { color: var(--dim); text-align: center; padding: 60px 20px; }
+.empty h2 { color: var(--fg); font-size: 17px; margin: 0 0 6px; }
+.empty kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px;
+  font-family: var(--mono); font-size: 11px; background: var(--panel-2); }
+
+.msg { margin-bottom: 18px; }
+.msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.msg-who { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); font-weight: 700; }
+.msg-who.agent { color: var(--accent); }
+.msg-time { font-size: 10.5px; color: var(--dim-2); font-family: var(--mono); }
+.msg-user .bubble { background: var(--user-bubble); border: 1px solid var(--line-soft); border-radius: 10px;
+  padding: 9px 13px; white-space: pre-wrap; word-break: break-word; }
+.msg-user .bubble.imgs { display: flex; flex-direction: column; gap: 8px; }
+.msg-body { word-break: break-word; }
+.msg-error { border: 1px solid var(--err); border-left-width: 3px; border-radius: 8px; padding: 9px 12px;
+  background: color-mix(in srgb, var(--err) 8%, transparent); }
+.msg-error .err-text { color: var(--err); white-space: pre-wrap; }
+.msg-warning { border-left: 3px solid var(--warn); padding: 6px 10px; color: var(--warn); font-size: 13px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent); border-radius: 0 8px 8px 0; }
+.msg-note { font-size: 12px; color: var(--dim); font-family: var(--mono); border-left: 2px solid var(--line);
+  padding: 3px 10px; }
+.msg-img { max-width: min(420px, 100%); border-radius: 8px; border: 1px solid var(--line); display: block; }
+
+/* markdown */
+.md { line-height: 1.6; }
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: .55em 0; }
+.md h1, .md h2, .md h3, .md h4 { margin: 1.1em 0 .45em; line-height: 1.25; color: var(--fg-strong); }
+.md h1 { font-size: 1.4em; } .md h2 { font-size: 1.22em; } .md h3 { font-size: 1.08em; }
+.md ul, .md ol { margin: .5em 0; padding-left: 1.4em; }
+.md li { margin: .18em 0; }
+.md blockquote { margin: .6em 0; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--dim); }
+.md code { font-family: var(--mono); font-size: .88em; background: var(--panel-3);
+  padding: 1.5px 5px; border-radius: 4px; }
+.md pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; overflow-x: auto; margin: .6em 0; }
+.md pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
+.md table { border-collapse: collapse; margin: .6em 0; font-size: 13px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 9px; }
+.md th { background: var(--panel-2); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+.md img { max-width: 100%; }
+.md a { text-decoration: none; } .md a:hover { text-decoration: underline; }
+
+/* highlight.js (minimal, theme-aware) */
+.hljs-comment, .hljs-quote { color: var(--dim-2); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag { color: #c792ea; }
+.hljs-string, .hljs-regexp, .hljs-addition { color: #9ecb8a; }
+.hljs-number, .hljs-symbol, .hljs-bullet { color: #f0a868; }
+.hljs-title, .hljs-section, .hljs-name, .hljs-selector-id { color: #7cc4ff; }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: #e3b341; }
+.hljs-built_in, .hljs-type { color: #66d19e; }
+.hljs-deletion { color: var(--diff-del-fg); }
+:root[data-theme="light"] .hljs-keyword, :root[data-theme="light"] .hljs-literal { color: #8250df; }
+:root[data-theme="light"] .hljs-string { color: #0a7d3f; }
+:root[data-theme="light"] .hljs-number { color: #b45309; }
+:root[data-theme="light"] .hljs-title { color: #0550ae; }
+
+/* thinking */
+.thinking { border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; background: var(--panel); overflow: hidden; }
+.thinking > summary { padding: 6px 11px; cursor: pointer; font-size: 12px; color: var(--dim); list-style: none;
+  display: flex; gap: 7px; align-items: center; }
+.thinking > summary::-webkit-details-marker { display: none; }
+.thinking > summary:hover { color: var(--fg); }
+.thinking .body { padding: 8px 12px; border-top: 1px solid var(--line-soft); color: var(--dim);
+  white-space: pre-wrap; font-size: 13px; font-style: italic; max-height: 380px; overflow: auto; }
+
+/* tool cards */
+.tool { border: 1px solid var(--line); border-radius: 9px; margin: 7px 0; background: var(--panel);
+  overflow: hidden; }
+.tool.err { border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.tool > summary { padding: 7px 11px; cursor: pointer; display: flex; gap: 8px; align-items: center;
+  list-style: none; font-family: var(--mono); font-size: 12.5px; }
+.tool > summary::-webkit-details-marker { display: none; }
+.tool > summary:hover { background: var(--panel-2); }
+.tool-name { color: var(--accent); font-weight: 600; }
+.tool-preview { color: var(--dim); min-width: 0; flex: 1; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; font-size: 12px; }
+.badge { font-size: 10px; padding: 1px 6px; border-radius: 20px; border: 1px solid var(--line);
+  color: var(--dim); flex: none; font-family: var(--sans, inherit); }
+.badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 60%, transparent); }
+.badge.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 60%, transparent); }
+.badge.run { color: var(--accent); border-color: var(--accent-dim); }
+.badge.count { color: var(--fg); background: var(--panel-3); }
+.tool-body { border-top: 1px solid var(--line-soft); }
+.tool-sec { padding: 7px 11px; }
+.tool-sec + .tool-sec { border-top: 1px dashed var(--line-soft); }
+.tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim-2);
+  margin-bottom: 3px; }
+.tool-pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  max-height: 420px; overflow: auto; color: var(--fg); }
+.tool-pre.dimtext { color: var(--dim); }
+
+/* diffs */
+.diff { font-family: var(--mono); font-size: 12px; max-height: 460px; overflow: auto;
+  background: var(--code-bg); }
+.diff div { padding: 0 10px; white-space: pre-wrap; word-break: break-word; min-height: 1.35em; }
+.diff .add { background: var(--diff-add); color: var(--diff-add-fg); }
+.diff .del { background: var(--diff-del); color: var(--diff-del-fg); }
+.diff .hunk { color: var(--accent); background: var(--panel-2); }
+.diff .meta { color: var(--dim); }
+.diff .ctx { color: var(--fg); }
+
+/* live / queued */
+.cursor { display: inline-block; width: 7px; height: 15px; background: var(--accent); vertical-align: -2px;
+  animation: blink 1s steps(2) infinite; margin-left: 1px; }
+@keyframes blink { 50% { opacity: 0; } }
+.queued-strip { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--warn);
+  padding: 6px 10px; border: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 8px; margin: 8px 0; }
+.working-strip { display: inline-flex; align-items: center; gap: 7px; color: var(--dim); font-size: 12px;
+  font-family: var(--mono); }
+
+/* ------------------------------------------------------------- composer */
+footer.composer-wrap { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 14px 12px; }
+.composer { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 7px; }
+.composer-box { border: 1px solid var(--line); border-radius: 11px; background: var(--bg); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 6px; }
+.composer-box:focus-within { border-color: var(--accent); }
+.composer textarea { border: 0; background: transparent; resize: none; padding: 2px 2px; min-height: 24px;
+  max-height: 220px; outline: none; font-size: 14.5px; line-height: 1.5; }
+.composer-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.composer-bar select { padding: 3px 6px; font-size: 12px; border-radius: 6px; background: var(--panel-2); }
+.attach-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; border: 1px solid var(--line);
+  border-radius: 20px; padding: 1px 8px; background: var(--panel-2); color: var(--dim); }
+.chip img { width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }
+.chip button { border: 0; background: none; color: var(--dim); padding: 0 0 0 2px; }
+
+/* ------------------------------------------------------------- modal 
+   --window-shadow is reused by panels so they float on mobile. */
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.48); z-index: 60;
+  display: flex; align-items: center; justify-content: center; padding: 24px; }
+@media (max-width: 700px) { .backdrop { padding: 0; align-items: flex-end; } }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); width: min(880px, 100%); max-height: min(86vh, 900px); display: flex;
+  flex-direction: column; overflow: hidden; }
+@media (max-width: 700px) { .modal { width: 100%; max-height: 92dvh; border-radius: 14px 14px 0 0; } }
+.modal.narrow { width: min(560px, 100%); }
+.modal.wide { width: min(1100px, 100%); }
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line);
+  font-weight: 650; font-size: 14px; }
+.modal-body { padding: 14px; overflow-y: auto; }
+.modal-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px;
+  justify-content: flex-end; align-items: center; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 10px; overflow-x: auto; }
+.tabs button { border: 0; background: none; padding: 8px 11px; font-size: 13px; color: var(--dim);
+  border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 13px; }
+.field > label { font-size: 12px; color: var(--dim); font-weight: 600; }
+.field .hint { font-size: 11.5px; color: var(--dim-2); }
+.list-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--line);
+  border-radius: 8px; margin-bottom: 6px; background: var(--panel-2); font-size: 13px; }
+.switch { width: 34px; height: 19px; border-radius: 20px; border: 1px solid var(--line); background: var(--panel-3);
+  position: relative; flex: none; transition: background .15s; }
+.switch > i { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--dim); transition: transform .15s, background .15s; }
+.switch.on { background: var(--accent-dim); border-color: var(--accent); }
+.switch.on > i { transform: translateX(15px); background: var(--accent); }
+
+/* palette + finder */
+.palette-list { max-height: 380px; overflow-y: auto; }
+.palette-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 7px;
+  cursor: pointer; font-size: 13.5px; }
+.palette-item.sel { background: var(--panel-3); }
+.palette-item .k { margin-left: auto; font-size: 11px; color: var(--dim-2); font-family: var(--mono); }
+.palette-item .sub { font-size: 11.5px; color: var(--dim); }
+
+/* code viewer / editor */
+.code-view { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px; overflow: auto; max-height: 58vh; white-space: pre; margin: 0; }
+textarea.code-edit { font-family: var(--mono); font-size: 12.5px; min-height: 46vh; width: 100%;
+  background: var(--code-bg); white-space: pre; overflow: auto; }
+
+/* git */
+.git-tree { width: 240px; border-right: 1px solid var(--line); overflow-y: auto; flex: none; }
+.git-file { padding: 5px 10px; font-size: 12.5px; font-family: var(--mono); cursor: pointer;
+  display: flex; gap: 6px; align-items: center; }
+.git-file:hover { background: var(--panel-2); }
+.git-file.sel { background: var(--panel-3); }
+.git-file .st { width: 14px; color: var(--dim); flex: none; }
+.git-file .st.M { color: var(--warn); } .git-file .st.A { color: var(--ok); } .git-file .st.D { color: var(--err); }
+.git-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* terminal */
+.term { background: #0b0f14; color: #d7dee8; font-family: var(--mono); font-size: 13px;
+  padding: 10px; height: 100%; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0;
+  line-height: 1.35; }
+.term-input { display: flex; gap: 6px; border-top: 1px solid var(--line); padding: 6px 8px; background: var(--panel); }
+.term-input input { flex: 1; background: #0b0f14; font-family: var(--mono); font-size: 13px; }
+
+/* toasts */
+.toasts { position: fixed; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 8px;
+  z-index: 90; max-width: min(420px, calc(100vw - 28px)); }
+.toast { background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--warn);
+  border-radius: 8px; padding: 9px 12px; font-size: 13px; box-shadow: var(--shadow); display: flex; gap: 8px;
+  align-items: flex-start; animation: toastin .16s ease; }
+.toast.error { border-left-color: var(--err); }
+.toast.ok { border-left-color: var(--ok); }
+@keyframes toastin { from { opacity: 0; transform: translateY(6px); } }
+
+/* iframe artefact */
+.frame-wrap { position: fixed; inset: 6% 8%; background: var(--panel); border-radius: 12px;
+  box-shadow: var(--shadow); z-index: 70; display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--line); }
+@media (max-width: 700px) { .frame-wrap { inset: 4vh 0 0; border-radius: 12px 12px 0 0; } }
+.frame-wrap .bar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px;
+  background: var(--panel-2); border-bottom: 1px solid var(--line); }
+.frame-wrap iframe { flex: 1; border: 0; background: #fff; width: 100%; }
+
+.boot { display: grid; place-items: center; height: 100%; color: var(--dim); font-size: 14px; gap: 10px; }
+.boot .fatal { color: var(--err); max-width: 520px; text-align: center; line-height: 1.6; }
+sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="boot"><div class="spinner" style="width:22px;height:22px;border-width:3px"></div><div>loading clj-shelley…</div></div>
+</div>
+
+<!-- ===================================================================== -->
+<!-- Templates. In-DOM so markup stays HTML; Vue's full build compiles them. -->
+<!-- ===================================================================== -->
+<!-- ------------------------------------------------------------- root -->
+<template id="tpl-root">
+<div class="shell" :class="{'drawer-collapsed': !S.drawerOpen && !isMobile}">
+
+  <!-- ======================= conversation drawer ======================= -->
+  <aside class="drawer" :class="{open: S.drawerOpen}">
+    <div class="drawer-head">
+      <div class="drawer-title">
+        <span>🐚 clj-shelley</span>
+        <span class="spacer"></span>
+        <button class="btn icon ghost" title="Search conversations" @click="toggleSearch">🔍</button>
+        <button class="btn icon ghost" :title="S.archivedMode ? 'Back to active' : 'Archived'"
+                @click="toggleArchived">{{ S.archivedMode ? '←' : '🗄' }}</button>
+      </div>
+      <div class="searchbox" v-show="S.showSearch">
+        <span class="ico">⌕</span>
+        <input type="search" ref="searchInput" v-model="S.query" placeholder="Search all messages…"
+               @input="onSearchInput" @keydown.esc="clearSearch">
+      </div>
+      <button class="btn primary full" v-if="!S.archivedMode" @click="newConversation">+ New conversation</button>
+      <div v-else class="dim" style="font-size:12px">Archived conversations</div>
+      <div class="row" style="flex-wrap:wrap;gap:4px" v-if="S.tagFilter || allTags.length">
+        <span class="tag" :class="{active: !S.tagFilter}" style="cursor:pointer"
+              v-for="t in allTags" :key="t" @click="S.tagFilter = S.tagFilter===t ? '' : t">#{{ t }}</span>
+      </div>
+    </div>
+
+    <div class="conv-list" ref="convList">
+      <div v-if="S.loadingConvs" class="dim" style="padding:14px;font-size:12.5px">loading…</div>
+      <div v-else-if="!rootConversations.length" class="dim" style="padding:16px;font-size:12.5px">
+        {{ S.query ? 'No conversations match.' : (S.archivedMode ? 'Nothing archived.' : 'No conversations yet.') }}
+      </div>
+      <template v-for="g in conversationGroups" :key="g.label">
+        <div class="conv-group-label" v-if="g.label">{{ g.label }}</div>
+        <conv-row v-for="c in g.rows" :key="c.conversation_id" :conv="c" :depth="0"></conv-row>
+      </template>
+    </div>
+
+    <div class="drawer-foot">
+      <button class="btn sm" title="Settings (⌘,)" @click="openModal('settings')">⚙</button>
+      <button class="btn sm" title="Git (⌘⇧G)" @click="openModal('git')">⎇</button>
+      <button class="btn sm" title="Terminal (⌘J)" @click="openModal('terminal')">▤</button>
+      <button class="btn sm" title="Files (⌘P)" @click="openModal('finder')">⌕</button>
+      <span class="spacer"></span>
+      <button class="btn icon ghost" :title="S.theme==='dark' ? 'Light theme' : 'Dark theme'"
+              @click="toggleTheme">{{ S.theme==='dark' ? '☀' : '☾' }}</button>
+      <button class="btn icon ghost" title="Commands (⌘K)" @click="openModal('palette')">⌘</button>
+    </div>
+  </aside>
+
+  <div v-if="S.drawerOpen && isMobile" style="position:fixed;inset:0;z-index:35;background:rgba(0,0,0,.4)"
+       @click="S.drawerOpen=false"></div>
+
+  <!-- ============================== main ============================== -->
+  <main>
+    <div class="topbar">
+      <button class="btn icon ghost" title="Conversations" @click="S.drawerOpen = !S.drawerOpen">☰</button>
+      <div style="min-width:0">
+        <div class="title nowrap">{{ headerTitle }}</div>
+        <div class="crumb nowrap" v-if="S.conversation.cwd" :title="S.conversation.cwd">
+          {{ shortPath(S.conversation.cwd) }}
+          <span v-if="S.git.branch"> · {{ S.git.branch }}</span>
+        </div>
+      </div>
+      <span class="spacer"></span>
+      <span class="working-strip" v-if="S.running"><span class="spinner"></span> working…</span>
+      <button class="btn sm danger" v-if="S.running" @click="cancelTurn" title="Stop this turn">■ Stop</button>
+      <button class="btn icon ghost" title="Export markdown" @click="exportMarkdown">↓</button>
+      <button class="btn icon ghost" title="Command palette (⌘K)" @click="openModal('palette')">⌘K</button>
+      <button class="btn icon ghost" title="Settings" @click="openModal('settings')">⚙</button>
+    </div>
+
+    <div class="usage-bar" v-if="S.currentId">
+      <span>ctx <b>{{ fmtNum(usage.contextTokens) }}</b><span class="dim"> / {{ fmtNum(usage.contextLimit) }}</span></span>
+      <span class="ctx-meter" :class="ctxClass"><i :style="{width: ctxPct + '%'}"></i></span>
+      <span>in <b>{{ fmtNum(usage.input) }}</b></span>
+      <span>cached <b>{{ fmtNum(usage.cached) }}</b></span>
+      <span>out <b>{{ fmtNum(usage.output) }}</b></span>
+      <span>cost <b>{{ fmtCost(usage.cost) }}</b></span>
+      <span v-if="usage.calls">{{ usage.calls }} call{{ usage.calls===1 ? '' : 's' }}</span>
+      <span class="spacer"></span>
+      <span v-if="S.queue.length" style="color:var(--warn)">{{ S.queue.length }} queued</span>
+      <button class="btn sm ghost" title="Compact context" @click="compactNow" v-if="!S.running">compact</button>
+    </div>
+
+    <div class="log" ref="log" @scroll="onLogScroll">
+      <div class="log-inner">
+        <div class="empty" v-if="!S.currentId">
+          <h2>clj-shelley</h2>
+          <div>Type below to start. <kbd>⌘K</kbd> commands · <kbd>⌘P</kbd> files · <kbd>⌘⇧G</kbd> git</div>
+        </div>
+        <div class="empty" v-else-if="!groups.length && !S.running">
+          <div>No messages yet.</div>
+        </div>
+
+        <msg-item v-for="g in groups" :key="g.key" :g="g"></msg-item>
+
+        <!-- live turn, rendered from the stream until the DB catches up -->
+        <msg-item v-if="liveGroup" :g="liveGroup" :live="true"></msg-item>
+
+        <div class="queued-strip" v-for="(q,i) in S.queue" :key="'q'+i">
+          <span class="badge">queued</span>
+          <span class="nowrap" style="flex:1">{{ q }}</span>
+          <span class="dim" style="font-size:11px">waits for the next round</span>
+        </div>
+
+        <div class="working-strip" v-if="S.running && !liveGroup" style="padding:6px 0">
+          <span class="spinner"></span> {{ S.status || 'working…' }}
+        </div>
+        <div style="height:26px"></div>
+      </div>
+    </div>
+
+    <button class="btn sm" v-if="!atBottom" @click="scrollToBottom(true)"
+            style="position:fixed;right:28px;bottom:150px;z-index:20;box-shadow:var(--shadow)">↓ newest</button>
+
+    <!-- ============================ composer ============================ -->
+    <footer class="composer-wrap">
+      <div class="composer">
+        <div class="attach-chips" v-if="S.attachments.length">
+          <span class="chip" v-for="(a,i) in S.attachments" :key="i">
+            <img v-if="a.preview" :src="a.preview" alt="">
+            {{ a.name }} <button title="Remove" @click="S.attachments.splice(i,1)">×</button>
+          </span>
+        </div>
+        <div class="composer-box" @paste="onPaste" @dragover.prevent @drop.prevent="onDrop">
+          <textarea ref="input" v-model="S.draft" rows="1" :placeholder="placeholder"
+                    @keydown="onKeydown" @input="autoGrow"></textarea>
+          <div class="composer-bar">
+            <button class="btn icon ghost" title="Attach file" @click="$refs.filepick.click()">📎</button>
+            <input type="file" ref="filepick" multiple style="display:none" @change="onFiles">
+            <select v-model="S.model" @change="setModel" title="Model" v-if="S.models.length">
+              <option v-for="m in S.models" :key="m.id" :value="m.id">{{ m.display_name || m.id }}</option>
+              <option v-if="S.model && !S.models.some(m=>m.id===S.model)" :value="S.model">{{ S.model }}</option>
+            </select>
+            <select v-model="S.thinking" @change="setThinking" title="Thinking level">
+              <option value="">thinking: default</option>
+              <option v-for="l in thinkingLevels" :key="l" :value="l">thinking: {{ l }}</option>
+            </select>
+            <span class="spacer"></span>
+            <button class="btn primary" v-if="!S.running" :disabled="!canSend" @click="send()">Send ⏎</button>
+            <button class="btn" v-else :disabled="!canSend" @click="send()"
+                    :title="'Queue for the next round'">Queue</button>
+          </div>
+        </div>
+        <div class="dim row" style="font-size:11px;gap:10px">
+          <span>{{ S.status }}</span>
+          <span class="spacer"></span>
+          <span v-if="S.streamState!=='open' && S.currentId" style="color:var(--warn)">stream {{ S.streamState }}</span>
+          <span><kbd style="font-family:var(--mono)">⏎</kbd> send · <kbd style="font-family:var(--mono)">⇧⏎</kbd> newline</span>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <!-- ============================== modals ============================== -->
+  <settings-modal v-if="S.modal==='settings'" @close="S.modal=null"></settings-modal>
+  <palette-modal v-if="S.modal==='palette'" @close="S.modal=null"></palette-modal>
+  <finder-modal v-if="S.modal==='finder'" @close="S.modal=null"></finder-modal>
+  <dir-picker v-if="S.modal==='dirpicker'" @close="S.modal=null"></dir-picker>
+  <file-viewer v-if="S.file.open" @close="S.file.open=false"></file-viewer>
+  <git-panel v-if="S.modal==='git'" @close="S.modal=null"></git-panel>
+  <terminal-panel v-if="S.modal==='terminal'" @close="S.modal=null"></terminal-panel>
+
+  <div class="frame-wrap" v-if="S.frame.url">
+    <div class="bar">
+      <b>{{ S.frame.title || 'artefact' }}</b>
+      <span class="spacer"></span>
+      <a :href="S.frame.url" target="_blank" rel="noopener" style="font-size:11px">open</a>
+      <button class="btn sm ghost" @click="S.frame={}">✕ close</button>
+    </div>
+    <iframe :src="S.frame.url" sandbox="allow-scripts allow-forms allow-popups"></iframe>
+  </div>
+
+  <div class="toasts">
+    <div class="toast" :class="t.kind" v-for="t in S.toasts" :key="t.id" @click="dismissToast(t.id)">
+      <span style="flex:1">{{ t.text }}</span><button class="btn sm ghost">✕</button>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------- conversation row -->
+<template id="tpl-conv">
+<div>
+  <div class="conv" :class="{active: S.currentId === conv.conversation_id}" @click="select"
+       :style="depth ? {paddingLeft: (10 + depth*14) + 'px'} : null">
+    <div class="conv-line">
+      <span class="spinner" v-if="conv.working || conv.agent_working"></span>
+      <span class="conv-title" :title="title">{{ title }}</span>
+      <span class="conv-time">{{ rel }}</span>
+    </div>
+    <div class="conv-preview" v-if="preview">{{ preview }}</div>
+    <div class="conv-tags" v-if="(conv.tags && conv.tags.length) || conv.subagent_count">
+      <span class="tag" :class="{active: S.tagFilter === t}" v-for="t in (conv.tags||[])" :key="t"
+            @click.stop="S.tagFilter = S.tagFilter===t ? '' : t">#{{ t }}</span>
+      <span class="tag" v-if="conv.subagent_count">⤷ {{ conv.subagent_count }} subagent{{ conv.subagent_count===1?'':'s' }}</span>
+    </div>
+    <div class="conv-actions" @click.stop>
+      <button class="btn sm ghost" :title="conv.archived ? 'Restore' : 'Archive'"
+              @click="toggleArchive">{{ conv.archived ? '↩' : '🗄' }}</button>
+      <button class="btn sm ghost" title="Delete" @click="remove">✕</button>
+    </div>
+  </div>
+  <conv-row v-for="c in kids" :key="c.conversation_id" :conv="c" :depth="depth + 1"></conv-row>
+</div>
+</template>
+
+<!-- ---------------------------------------------------------- markdown view -->
+<template id="tpl-md">
+  <div class="md" v-html="html"></div>
+</template>
+
+<!-- ------------------------------------------------------------- diff view -->
+<template id="tpl-diff">
+  <div class="diff"><div v-for="(line, i) in lines" :key="i" :class="line.cls">{{ line.text || ' ' }}</div></div>
+</template>
+
+<!-- -------------------------------------------------------------- tool card -->
+<template id="tpl-tool">
+<details class="tool" :class="{err: item.result && item.result.isError}" :open="open" @toggle="onToggle">
+  <summary>
+    <span style="color:var(--dim)">⚙</span>
+    <span class="tool-name">{{ item.name }}</span>
+    <span class="tool-preview">{{ preview }}</span>
+    <span class="badge count" v-if="item.count > 1">×{{ item.count }}</span>
+    <span class="badge run" v-if="!item.result">running…</span>
+    <span class="badge" :class="item.result && item.result.isError ? 'err' : 'ok'" v-else>
+      {{ item.result.isError ? 'error' : 'ok' }}</span>
+    <span class="badge" v-if="elapsed">{{ elapsed }}</span>
+  </summary>
+  <div class="tool-body">
+    <div class="tool-sec" v-if="inputText">
+      <div class="tool-label">input</div>
+      <diff-view v-if="inputDiff" :text="inputText"></diff-view>
+      <pre v-else class="tool-pre">{{ inputText }}</pre>
+    </div>
+    <div class="tool-sec" v-if="item.result">
+      <div class="tool-label">output</div>
+      <diff-view v-if="item.result.isDiff" :text="item.result.text"></diff-view>
+      <pre v-else class="tool-pre" :class="{dimtext: !item.result.text}">{{ item.result.text || '(no output)' }}</pre>
+    </div>
+    <div class="tool-sec" v-if="images.length">
+      <div class="tool-label">images</div>
+      <img class="msg-img" v-for="(src, i) in images" :key="i" :src="src" alt="tool output image">
+    </div>
+    <div class="tool-sec" v-if="item.result && item.result.progress">
+      <div class="tool-label">progress</div>
+      <pre class="tool-pre dimtext">{{ item.result.progress }}</pre>
+    </div>
+  </div>
+</details>
+</template>
+
+<!-- ------------------------------------------------------------- message row -->
+<template id="tpl-msg">
+<div class="msg" :class="'msg-' + g.type" :data-message-id="g.id">
+  <div class="msg-head">
+    <span class="msg-who" :class="{agent: g.type !== 'user'}">{{ g.type === 'user' ? (g.author || 'you') : 'shelley' }}</span>
+    <span class="msg-time" v-if="g.time">{{ g.time }}</span>
+    <span class="badge" v-if="g.badge">{{ g.badge }}</span>
+    <span class="spacer"></span>
+    <button class="btn sm ghost" v-if="g.raw" :title="'copy message JSON'" @click="copyRaw">copy</button>
+  </div>
+
+  <!-- user -->
+  <template v-if="g.type === 'user'">
+    <div class="bubble imgs">
+      <md-view v-if="g.text" :text="g.text"></md-view>
+      <img class="msg-img" v-for="(src, i) in g.images" :key="i" :src="src" alt="attached image">
+    </div>
+  </template>
+
+  <!-- agent -->
+  <template v-else-if="g.type === 'agent'">
+    <div class="msg-body">
+      <template v-for="(it, i) in g.items" :key="i">
+        <md-view v-if="it.kind === 'text'" :text="it.text"></md-view>
+        <details v-else-if="it.kind === 'thinking'" class="thinking" :open="it.open">
+          <summary>💭 <span>{{ it.open ? 'thinking' : 'thought for a moment' }}</span>
+            <span class="dim" style="font-size:11px">{{ it.text.length }} chars</span></summary>
+          <div class="body">{{ it.text }}</div>
+        </details>
+        <tool-card v-else-if="it.kind === 'tool'" :item="it"></tool-card>
+        <img v-else-if="it.kind === 'image'" class="msg-img" :src="it.src" alt="image">
+        <div v-else-if="it.kind === 'error'" class="msg-error">
+          <div class="err-text">{{ it.text }}</div>
+          <button class="btn sm" v-if="it.retryable" @click="retry">Retry</button>
+        </div>
+      </template>
+      <span class="cursor" v-if="live && streaming"></span>
+    </div>
+  </template>
+
+  <!-- error row -->
+  <div v-else-if="g.type === 'error'" class="msg-error">
+    <div class="err-text">{{ g.text }}</div>
+    <div class="row" style="margin-top:7px" v-if="g.retryable">
+      <button class="btn sm" @click="retry">Retry</button>
+      <span class="dim" style="font-size:11.5px">re-runs the turn from stored history</span>
+    </div>
+  </div>
+
+  <!-- warning / note rows -->
+  <div v-else-if="g.type === 'warning'" class="msg-warning">{{ g.text }}</div>
+  <div v-else-if="g.type === 'note'" class="msg-note">{{ g.text }}</div>
+
+  <!-- a message that only carried tool results already merged into cards -->
+  <template v-else-if="g.type === 'tool'">
+    <tool-card v-for="(it, i) in g.items" :key="i" :item="it"></tool-card>
+  </template>
+</div>
+</template>
+
+<!-- ---------------------------------------------------------------- palette -->
+<template id="tpl-palette">
+<div class="backdrop" @click.self="$emit('close')">
+  <div class="modal narrow">
+    <div class="modal-head">
+      <span>Commands</span><span class="spacer"></span>
+      <button class="btn sm ghost" @click="$emit('close')">esc</button>
+    </div>
+    <div class="modal-body" style="padding:10px">
+      <input type="text" ref="inp" v-model="q" placeholder="Type a command…" style="width:100%"
+             @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="run()">
+      <div class="palette-list" style="margin-top:8px">
+        <div class="palette-item" v-for="(it, i) in shown" :key="it.id" :class="{sel: i === sel}"
+             @click="sel = i; run()" @mouseenter="sel = i">
+          <span style="width:16px;text-align:center">{{ it.icon }}</span>
+          <span>{{ it.label }}</span>
+          <span class="k" v-if="it.key">{{ it.key }}</span>
+        </div>
+        <div v-if="!shown.length" class="dim" style="padding:10px;font-size:12.5px">No matching command.</div>
+      </div>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- ----------------------------------------------------------- file finder -->
+<template id="tpl-finder">
+<div class="backdrop" @click.self="$emit('close')">
+  <div class="modal">
+    <div class="modal-head">
+      <span>Find file</span>
+      <span class="crumb dim" style="font-size:11.5px">{{ S.conversation.cwd || '' }}</span>
+      <span class="spacer"></span>
+      <button class="btn sm ghost" @click="$emit('close')">esc</button>
+    </div>
+    <div class="modal-body" style="padding:10px">
+      <input type="text" ref="inp" v-model="q" style="width:100%"
+             placeholder="filename or path…" @input="debouncedSearch"
+             @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="pick()">
+      <div class="palette-list" style="margin-top:8px">
+        <div class="palette-item" v-for="(f, i) in shown" :key="f.path || f" :class="{sel: i===sel}"
+             @click="sel=i; pick()" @mouseenter="sel=i">
+          <span>📄</span>
+          <span class="nowrap" style="flex:1">{{ f.path || f }}</span>
+          <span class="sub" v-if="f.size">{{ fmtSize(f.size) }}</span>
+        </div>
+        <div v-if="S.findState==='loading'" class="dim" style="padding:10px;font-size:12.5px">searching…</div>
+        <div v-else-if="S.findState==='empty'" class="dim" style="padding:10px;font-size:12.5px">No files.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn sm" @click="$emit('close'); openModal('dirpicker')">Change directory…</button>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- ------------------------------------------------------- directory picker -->
+<template id="tpl-dir">
+<div class="backdrop" @click.self="$emit('close')">
+  <div class="modal narrow">
+    <div class="modal-head"><span>Directory</span><span class="spacer"></span>
+      <button class="btn sm ghost" @click="$emit('close')">esc</button></div>
+    <div class="modal-body" style="padding:10px">
+      <div class="row" style="margin-bottom:8px">
+        <button class="btn sm" @click="up()">↑ up</button>
+        <input type="text" v-model="path" style="flex:1" @keydown.enter="load(path)">
+        <button class="btn sm" @click="load(path)">go</button>
+      </div>
+      <div class="palette-list">
+        <div class="palette-item" v-for="(d,i) in dirs" :key="d.name" :class="{sel: i===sel}"
+             @click="enter(d.name)" @mouseenter="sel=i">📁 <span>{{ d.name }}</span></div>
+        <div v-if="!dirs.length" class="dim" style="padding:8px;font-size:12.5px">No subdirectories.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="dim" style="font-size:11.5px;margin-right:auto">{{ path }}</span>
+      <button class="btn primary" @click="useThis">Use this directory</button>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- ------------------------------------------------------------ file viewer -->
+<template id="tpl-file">
+<div class="backdrop" @click.self="$emit('close')" style="z-index:75">
+  <div class="modal wide">
+    <div class="modal-head">
+      <span class="mono nowrap" style="font-size:12.5px">{{ S.file.path }}</span>
+      <span class="badge" v-if="S.file.truncated">truncated</span>
+      <span class="spacer"></span>
+      <button class="btn sm" v-if="!S.file.editing" @click="startEdit">edit</button>
+      <button class="btn sm" v-if="S.file.editing" @click="save" :disabled="S.file.saving">save</button>
+      <button class="btn sm ghost" @click="$emit('close')">close</button>
+    </div>
+    <div class="modal-body">
+      <div v-if="S.file.loading" class="dim">loading…</div>
+      <div v-else-if="S.file.error" class="msg-error"><div class="err-text">{{ S.file.error }}</div></div>
+      <textarea v-else-if="S.file.editing" class="code-edit" v-model="S.file.content" spellcheck="false"></textarea>
+      <diff-view v-else-if="isDiff" :text="S.file.content"></diff-view>
+      <pre v-else class="code-view">{{ S.file.content }}</pre>
+    </div>
+    <div class="modal-foot">
+      <span class="dim" style="font-size:11.5px;margin-right:auto">{{ (S.file.content||'').split('\n').length }} lines</span>
+      <button class="btn sm" @click="openGitForFile">diff</button>
+      <button class="btn sm" @click="copyContent">copy</button>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- git panel -->
+<template id="tpl-git">
+<div class="backdrop" @click.self="$emit('close')">
+  <div class="modal wide">
+    <div class="modal-head">
+      <span>⎇ Git</span>
+      <span class="crumb" style="font-size:11.5px">{{ S.git.branch || '—' }}</span>
+      <span class="badge" v-if="S.git.commit">{{ String(S.git.commit).slice(0, 8) }}</span>
+      <span class="dim nowrap" style="font-size:11.5px;max-width:340px">{{ S.git.subject }}</span>
+      <span class="spacer"></span>
+      <button class="btn sm" @click="load">refresh</button>
+      <button class="btn sm ghost" @click="$emit('close')">esc</button>
+    </div>
+    <div style="display:flex;min-height:0;flex:1">
+      <div class="git-tree">
+        <div v-if="!files.length" class="dim" style="padding:12px;font-size:12.5px">
+          {{ S.git.error ? '—' : 'Working tree clean.' }}
+        </div>
+        <div class="git-file" v-for="f in files" :key="f.path" :class="{sel: f.path===sel}"
+             @click="select(f.path)">
+          <span class="st" :class="f.status">{{ f.status }}</span>
+          <span class="nowrap" :title="f.path">{{ f.path }}</span>
+        </div>
+      </div>
+      <div class="git-pane">
+        <div class="modal-body" style="flex:1;overflow:auto">
+          <div v-if="S.git.error" class="msg-error"><div class="err-text">{{ S.git.error }}</div></div>
+          <div v-else-if="!sel" class="dim" style="font-size:13px">Select a file to see its diff.</div>
+          <div v-else-if="S.git.diffLoading" class="dim">loading diff…</div>
+          <diff-view v-else-if="S.git.diff" :text="S.git.diff"></diff-view>
+          <div v-else class="dim" style="font-size:13px">No diff.</div>
+        </div>
+        <div class="modal-foot">
+          <span class="dim mono" style="font-size:11px;margin-right:auto">{{ S.git.repo_root }}</span>
+          <button class="btn sm" v-if="sel" @click="openFile(sel)">open file</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- -------------------------------------------------------- terminal panel -->
+<template id="tpl-term">
+<div class="backdrop" @click.self="$emit('close')" style="z-index:72">
+  <div class="modal wide" style="height:min(78vh,760px)">
+    <div class="modal-head">
+      <span>▤ Terminal</span>
+      <span class="badge" :class="connected ? 'ok' : 'err'">{{ connected ? 'connected' : (S.term.exit ? 'exited' : 'offline') }}</span>
+      <span class="dim mono" style="font-size:11px">{{ S.conversation.cwd }}</span>
+      <span class="spacer"></span>
+      <button class="btn sm" @click="reconnect">reconnect</button>
+      <button class="btn sm ghost" @click="$emit('close')">close</button>
+    </div>
+    <pre class="term" ref="term" v-html="rendered"></pre>
+    <div class="term-input">
+      <input type="text" ref="input" v-model="line" :disabled="!connected"
+             placeholder="command…" @keydown.enter.prevent="submit" @keydown.up.prevent="history(-1)"
+             @keydown.down.prevent="history(1)">
+      <button class="btn sm" :disabled="!connected" @click="submit">run</button>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- ============================================================== settings -->
+<template id="tpl-settings">
+<div class="backdrop" @click.self="$emit('close')">
+  <div class="modal">
+    <div class="modal-head"><span>Settings</span><span class="spacer"></span>
+      <button class="btn sm ghost" @click="$emit('close')">esc</button></div>
+    <div class="tabs">
+      <button v-for="t in tabs" :key="t.id" :class="{active: tab===t.id}" @click="tab=t.id">{{ t.label }}</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- model / thinking -->
+      <div v-if="tab==='model'">
+        <div class="field">
+          <label>Model</label>
+          <select v-model="S.model" @change="setModel">
+            <option v-for="m in S.models" :key="m.id" :value="m.id">
+              {{ m.display_name || m.id }}{{ m.supports_images ? '' : '' }}{{ m.tier === 2 ? ' (more)' : '' }}</option>
+            <option v-if="S.model && !S.models.some(m=>m.id===S.model)" :value="S.model">{{ S.model }}</option>
+          </select>
+          <div class="hint" v-if="modelMeta">{{ modelMeta }}</div>
+        </div>
+        <div class="field">
+          <label>Thinking level</label>
+          <select v-model="S.thinking" @change="setThinking">
+            <option value="">default</option>
+            <option v-for="l in thinkingLevels" :key="l" :value="l">{{ l }}</option>
+          </select>
+          <div class="hint">Applies to the next turn on this conversation.</div>
+        </div>
+        <div class="field">
+          <label>System prompt override</label>
+          <textarea v-model="S.systemPrompt" rows="5" placeholder="Leave empty to use the server's system prompt"></textarea>
+        </div>
+        <div class="field">
+          <label>Profiles</label>
+          <div class="row" style="flex-wrap:wrap;gap:6px">
+            <button class="btn sm" v-for="p in S.profiles" :key="p.name || p" @click="activateProfile(p)">
+              {{ p.name || p }}<span v-if="p.active || p.is_active" class="badge ok" style="margin-left:5px">active</span>
+            </button>
+            <span class="dim" v-if="!S.profiles.length" style="font-size:12px">none</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Tool overrides</label>
+          <div class="hint">“off” hides a tool from the model for this conversation.</div>
+          <div class="list-item" v-for="(v, k) in S.toolOverrides" :key="k">
+            <span class="mono" style="flex:1">{{ k }}</span>
+            <button class="btn sm" :class="v==='on' ? 'primary' : ''" @click="setTool(k,'on')">on</button>
+            <button class="btn sm" :class="v==='off' ? 'danger' : ''" @click="setTool(k,'off')">off</button>
+            <button class="btn sm ghost" @click="delTool(k)">×</button>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <input type="text" v-model="newTool" placeholder="tool name" style="flex:1">
+            <button class="btn sm" @click="addTool">add off</button>
+          </div>
+          <div class="list-item" style="margin-top:6px">
+            <span style="flex:1">Disable all tools</span>
+            <button class="switch" :class="{on: S.disableAllTools}" @click="S.disableAllTools = !S.disableAllTools"><i></i></button>
+          </div>
+        </div>
+        <button class="btn primary" @click="saveSettings">Save</button>
+      </div>
+
+      <!-- MCP -->
+      <div v-if="tab==='mcp'">
+        <div class="hint" style="margin-bottom:10px">
+          MCP servers extend the toolset. Add one with the command the server should spawn.
+        </div>
+        <div class="list-item" v-for="s in S.mcp.servers" :key="s.name">
+          <span class="badge" :class="s.status==='connected'||s.connected ? 'ok' : (s.status ? 'err' : '')">
+            {{ s.status || (s.connected ? 'connected' : 'unknown') }}</span>
+          <span class="mono" style="flex:1">{{ s.name }}</span>
+          <span class="dim mono" style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis">{{ s.command }} {{ (s.args||[]).join(' ') }}</span>
+          <button class="btn sm" @click="testMcp(s)">test</button>
+          <button class="btn sm danger" @click="removeMcp(s)">remove</button>
+        </div>
+        <div v-if="!S.mcp.servers.length" class="dim" style="font-size:12.5px;margin-bottom:10px">No servers configured.</div>
+        <div v-if="S.mcp.toolsFor" class="list-item" style="flex-direction:column;align-items:flex-start">
+          <div style="font-size:12px;font-weight:600">Tools from {{ S.mcp.toolsFor }}</div>
+          <div class="mono" style="font-size:11.5px;color:var(--dim)" v-for="t in S.mcp.tools" :key="t.name">
+            {{ t.name }} — {{ (t.description||'').slice(0,80) }}</div>
+          <div class="dim" v-if="!S.mcp.tools.length" style="font-size:12px">none / unavailable</div>
+        </div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;margin-top:10px">
+          <div class="field"><label>Name</label><input type="text" v-model="mcpForm.name" placeholder="my-server"></div>
+          <div class="field"><label>Command</label><input type="text" v-model="mcpForm.command" placeholder="npx"></div>
+          <div class="field"><label>Args (space separated)</label><input type="text" v-model="mcpForm.args" placeholder="-y @modelcontextprotocol/server-filesystem /tmp"></div>
+          <div class="field"><label>Env (KEY=value per line)</label><textarea v-model="mcpForm.env" rows="2"></textarea></div>
+          <button class="btn primary" @click="addMcp" :disabled="!mcpForm.name || !mcpForm.command">Add server</button>
+        </div>
+      </div>
+
+      <!-- feature flags -->
+      <div v-if="tab==='flags'">
+        <div class="list-item" v-for="(v, k) in S.flags" :key="k">
+          <span class="mono" style="flex:1">{{ k }}</span>
+          <span class="dim" style="font-size:11.5px">{{ fmtFlag(v) }}</span>
+          <button class="switch" :class="{on: truthy(v)}" @click="toggleFlag(k, v)"><i></i></button>
+        </div>
+        <div v-if="!Object.keys(S.flags).length" class="dim" style="font-size:12.5px">
+          No feature flags (the server may not expose them yet).
+        </div>
+      </div>
+
+      <!-- integrations -->
+      <div v-if="tab==='integrations'">
+        <div class="list-item" v-for="(i, idx) in S.integrations" :key="idx">
+          <span class="badge" :class="i.enabled===false ? 'err' : 'ok'">
+            {{ i.kind || i.type || i.name || 'channel' }}</span>
+          <span class="mono" style="flex:1">{{ i.name || i.id || i.channel || '' }}</span>
+          <span class="dim" style="font-size:11.5px">{{ i.status || (i.enabled===false ? 'disabled' : 'attached') }}</span>
+          <button class="btn sm" v-if="(i.kind||i.type||'').includes('slack')" @click="testSlack">test slack</button>
+        </div>
+        <div v-if="!S.integrations.length" class="dim" style="font-size:12.5px">
+          No integrations attached (or the endpoint is not available).
+        </div>
+      </div>
+
+      <!-- about -->
+      <div v-if="tab==='about'">
+        <div class="field"><label>Server</label>
+          <div class="mono" style="font-size:12px">
+            tag {{ S.version.tag || '?' }} · commit {{ (S.version.commit||'?').slice(0,10) }}<br>
+            model {{ S.health.model || S.model || '?' }}<br>
+            status {{ S.health.status || 'unknown' }}
+          </div>
+        </div>
+        <div class="field"><label>Capabilities</label>
+          <div class="row" style="flex-wrap:wrap;gap:4px">
+            <span class="tag" v-for="c in (S.version.capabilities||[])" :key="c">{{ c }}</span>
+            <span class="dim" v-if="!(S.version.capabilities||[]).length" style="font-size:12px">none advertised</span>
+          </div>
+        </div>
+        <div class="field"><label>Endpoint compatibility</label>
+          <div class="mono" style="font-size:11.5px;color:var(--dim)">{{ compatSummary }}</div>
+        </div>
+        <div class="field"><label>Model costs</label>
+          <div class="mono" style="font-size:11.5px;color:var(--dim);max-height:180px;overflow:auto">
+            <div v-for="(v, k) in S.costs" :key="k">{{ k }}: {{ typeof v === 'object' ? JSON.stringify(v) : v }}</div>
+            <span v-if="!Object.keys(S.costs).length">not reported by the server</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="dim" style="font-size:11.5px;margin-right:auto">{{ S.status }}</span>
+      <button class="btn sm" @click="$emit('close')">close</button>
+    </div>
+  </div>
+</div>
+</template>
+
+<!--SCRIPTS-->
+</body>
+</html>
