@@ -96,17 +96,19 @@ wins — and the row is a bug.
 
 | Feature | Original | Here |
 | --- | --- | --- |
-| Conversation list + search | Vue | partial |
+| Dark/light theme, responsive layout | yes | done |
+| Export conversation to markdown | yes | done |
+| Conversation list + search | Vue | done (server `q=` was ignored — see server row) |
 | Streaming transcript | Vue | done |
-| Markdown + syntax highlighting | shiki | todo |
-| Diff viewer for edits | yes | todo |
-| Tool call coalescing/rendering | yes | partial |
-| File finder, directory picker | yes | todo |
-| Model picker, settings, profiles | yes | todo |
-| Image paste/attach | yes | todo |
-| Terminal pane | yes | todo |
-| Subagent/btw views, TOC | yes | todo |
-| Keyboard palette | yes | todo |
+| Markdown + syntax highlighting | shiki | done (highlight.js instead of shiki) |
+| Diff viewer for edits | yes | done |
+| Tool call coalescing/rendering | yes | done |
+| File finder, directory picker | yes | done (⌘P, ⌘⇧G) |
+| Model picker, settings, profiles | yes | done |
+| Image paste/attach | yes | partial (needs `/api/upload` wired) |
+| Terminal pane | yes | done (tmux-backed, ⌘J) |
+| Subagent/btw views, TOC | yes | partial (subagent nesting; btw service exists, no route) |
+| Keyboard palette | yes | done (⌘K) |
 | i18n | yes | todo |
 
 ## Platform
