@@ -56,9 +56,13 @@
     (when (ok? r)
       (->> (str/split-lines (out r))
            (remove str/blank?)
+           ;; Porcelain v1 is "XY PATH": two status columns, a space, then the
+           ;; path. Splitting on whitespace instead of slicing a fixed offset
+           ;; survives a status column that git left out and keeps the whole
+           ;; path when it contains spaces.
            (mapv (fn [line]
-                   {:status (str/trim (subs line 0 2))
-                    :path (str/trim (subs line (min 3 (count line))))}))))))
+                   {:status (str/trim (subs line 0 (min 2 (count line))))
+                    :path (str/trim (last (str/split line #"\s+" 3)))}))))))
 
 (defn diff
   "Unified diff against HEAD, optionally for one path."

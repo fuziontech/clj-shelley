@@ -62,12 +62,17 @@
     (if (str/blank? out) 0 (count (str/split-lines out)))))
 
 (defn state
-  "Everything the UI shows about a directory's git state. Cached for a moment."
+  "Everything the UI shows about a directory's git state. Cached for a moment.
+
+  A stale entry is recomputed here rather than recursed on: recursing re-enters
+  the same stale lookup and spins forever, which wedges whichever request
+  thread asked."
   [dir]
   (let [dir (str (or dir "."))
-        now (System/currentTimeMillis)]
-    (if-let [{:keys [at value]} (get @cache dir)]
-      (if (< (- now at) ttl-ms) value (recur dir))
+        now (System/currentTimeMillis)
+        cached (get @cache dir)]
+    (if (and cached (< (- now (:at cached)) ttl-ms))
+      (:value cached)
       (let [r (if-let [repo-root (root dir)]
                 (merge {:git_repo_root repo-root
                         :git_branch (branch dir)}

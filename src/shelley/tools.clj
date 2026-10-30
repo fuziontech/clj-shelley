@@ -15,73 +15,104 @@
 
   `ctx` carries: :working-dir (atom of absolute path), :conversation-id,
   :emit (fn [event]) for progress, :run-subagent (fn [{:keys [prompt tools toolset model]}])
-  and :base-url."
+  and :base-url. Two more keys are optional and enable capabilities rather than
+  failing without them:
+
+    :inject-message  (fn [message]) — put a user message into the running
+                     conversation. Background jobs use it to deliver their
+                     completion notice; without it the job still emits
+                     :background-job-completion, so a UI can show the result.
+    :messages        the conversation history (vector, atom or fn), used by
+                     compact_in_place to index what it is allowed to compact.
+
+  Every handler also receives :tool-use-id, set by `execute` from the block, so
+  an asynchronous handler can tag the events it emits later."
   (:require [clojure.java.shell :as sh]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [cheshire.core :as json]
-            [shelley.llm :as llm])
+            [shelley.llm :as llm]
+            [shelley.tools.bash-job :as bash-job]
+            [shelley.tools.browse :as browse]
+            [shelley.tools.compact :as compact]
+            [shelley.tools.files :as files]
+            [shelley.tools.mcp :as mcp]
+            [shelley.tools.message-user :as message-user]
+            [shelley.tools.skills :as skills])
   (:import [java.io File]
            [java.util.concurrent TimeUnit]))
 
 ;; ---------------------------------------------------------------------------
 ;; bash
 
-(def ^:private bash-timeout-ms 120000)
+(def ^:private bash-timeout-ms 60000)
+(def ^:private bash-output-limit 40000)
 
-(defn- drain
-  "Read a stream into a StringBuilder on a background thread, emitting progress."
-  [^java.io.InputStream in ^StringBuilder sb emit]
-  (doto (Thread. (fn []
-                   (with-open [r (io/reader in)]
-                     (let [buf (char-array 4096)]
-                       (loop []
-                         (let [n (.read r buf)]
-                           (when (pos? n)
-                             (let [s (String. buf 0 n)]
-                               (locking sb (.append sb s))
-                               (when emit (emit {:type :tool-progress :text s})))
-                             (recur))))))))
-    (.setDaemon true)
-    (.start)))
+(defn- truncate-middle
+  "Keep both ends of a long output: the first lines usually say what ran, the
+  last lines say how it ended."
+  [^String out limit]
+  (if (<= (count out) limit)
+    out
+    (let [half (quot limit 2)]
+      (str (subs out 0 half)
+           "\n... [" (- (count out) limit) " chars omitted; read the log file for the rest] ...\n"
+           (subs out (- (count out) half))))))
+
+(defn- bash-result
+  "Foreground result for a finished job: output, exit code, and a nudge toward
+  the background tool when output was cut."
+  [job]
+  (let [log (io/file (:log-path job))
+        out (if (.exists log) (slurp log) "")
+        code (bash-job/exit-code job)
+        shown (truncate-middle out bash-output-limit)]
+    {:content [(llm/text-block
+                (str (when (and code (not (zero? code))) (str "[exit " code "]\n"))
+                     (if (str/blank? shown) "(no output)" shown)))]
+     :is-error (boolean (and code (not (zero? code))))}))
 
 (defn run-bash
-  "Run a shell command. Returns {:content ... :is-error bool}.
+  "Run a shell command.
 
-  The working directory is wherever the conversation last moved to, so this is
-  stateful per conversation, matching the original's bash tool."
-  [{:keys [working-dir emit]} {:keys [command timeout_ms] :as _args}]
-  (let [dir (or @working-dir (System/getProperty "user.dir"))
-        timeout (or timeout_ms bash-timeout-ms)
-        pb (doto (ProcessBuilder. ["bash" "--login" "-c" command])
-             (.directory (File. dir))
-             (.redirectErrorStream true))
-        env (.environment pb)]
-    ;; Non-interactive, no pagers, and make sure common tool chains are on PATH.
-    (.put env "PAGER" "cat")
-    (.put env "GIT_PAGER" "cat")
-    (.put env "DEBIAN_FRONTEND" "noninteractive")
-    (let [proc (.start pb)
-          sb (StringBuilder.)]
-      (drain (.getInputStream proc) sb emit)
-      (let [finished (.waitFor proc timeout TimeUnit/MILLISECONDS)]
-        (when-not finished
-          (.destroyForcibly proc)
-          (.waitFor proc 5 TimeUnit/SECONDS))
-        (Thread/sleep 60) ; let the drain thread finish flushing
-        (let [code (when finished (.exitValue proc))
-              out (locking sb (str sb))
-              out (if (> (count out) 40000)
-                    (str (subs out 0 20000) "\n... [truncated " (- (count out) 40000) " chars] ...\n"
-                         (subs out (- (count out) 20000)))
-                    out)
-              failed? (or (not finished) (and code (not (zero? code))))]
-          {:content [(llm/text-block
-                      (str (cond (not finished) (str "[timed out after " timeout "ms; process killed]\n")
-                                 (not (zero? code)) (str "[exit " code "]\n")
-                                 :else "")
-                           (if (str/blank? out) "(no output)" out)))]
-           :is-error failed?})))))
+  Every command becomes a background *job* under the hood (see
+  shelley.tools.bash-job): it writes to a log file and records its own exit
+  status. That is what makes the two cases below one code path —
+
+  - it finishes inside `timeout_ms` (default 60s): you get its output and exit
+    code, exactly like a plain shell call;
+  - it is still running: control returns with a job id and the log tail, and
+    the completion arrives as a new message when it exits. Pass
+    `background: true` to get that behaviour immediately.
+
+  Commands run inside the bubblewrap sandbox when SHELLEY_SANDBOX=1."
+  [{:keys [working-dir emit inject-message conversation-id] :as ctx}
+   {:keys [command timeout_ms background] :as _args}]
+  (let [dir (or (some-> working-dir deref) (System/getProperty "user.dir"))
+        timeout (long (or timeout_ms bash-timeout-ms))
+        job (bash-job/start! {:command command
+                              :working-dir dir
+                              :conversation-id conversation-id
+                              :tool-use-id (:tool-use-id ctx)})]
+    (if background
+      (let [stop (bash-job/progress-loop job emit)]
+        (future (deref (:exited job) (* 24 60 60 1000) nil) (stop))
+        {:content [(llm/text-block (bash-job/background! job {:emit emit :inject-message inject-message}
+                                                         "Started"))]})
+      ;; Stream the log tail while we wait, so a slow foreground command still
+      ;; shows progress in the UI.
+      (let [stop (bash-job/progress-loop job emit)
+            {:keys [finished?]} (bash-job/wait! job timeout)]
+        (if finished?
+          (do (stop) (bash-result job))
+          ;; Still running after the timeout: hand it back rather than killing
+          ;; work the agent may be waiting on. The progress loop keeps running
+          ;; until the job exits.
+          (do
+            (future (deref (:exited job) (* 24 60 60 1000) nil) (stop))
+            {:content [(llm/text-block
+                        (bash-job/background! job {:emit emit :inject-message inject-message}
+                                              (str "Still running after " timeout "ms, so it is now a")))]}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; patch — precise file edits
@@ -290,6 +321,88 @@
                          :required ["html"]}
           :handler run-output-iframe}
 
+         {:name "read_file"
+          :description "Read a text file with line numbers. Paths resolve against the working directory; a path outside it is refused. Use offset and limit for large files."
+          :default-on? true
+          :input-schema {:type "object"
+                         :properties {:path {:type "string" :description "File to read."}
+                                      :offset {:type "integer" :description "First line, 1-based."}
+                                      :limit {:type "integer" :description "How many lines."}}
+                         :required ["path"]}
+          :handler files/read-file}
+
+         {:name "write_file"
+          :description "Create or overwrite a file, creating parent directories. Use patch for edits to an existing file; use this for new files or complete rewrites."
+          :default-on? true
+          :input-schema {:type "object"
+                         :properties {:path {:type "string"}
+                                      :content {:type "string"}
+                                      :append {:type "boolean" :description "Append instead of overwriting."}}
+                         :required ["path" "content"]}
+          :handler files/write-file}
+
+         {:name "list_directory"
+          :description "List the immediate children of a directory, directories first, with sizes."
+          :default-on? true
+          :input-schema {:type "object"
+                         :properties {:path {:type "string" :description "Directory, default the working directory."}
+                                      :limit {:type "integer"}}
+                         :required []}
+          :handler files/list-directory}
+
+         {:name "find_files"
+          :description "Find files by glob pattern and/or by text in their path or contents. Skips .git, node_modules, target and similar by default."
+          :default-on? true
+          :input-schema {:type "object"
+                         :properties {:dir {:type "string" :description "Where to start; default the working directory."}
+                                      :pattern {:type "string" :description "Glob on the path relative to dir, e.g. src/**/*.clj"}
+                                      :query {:type "string" :description "Case-insensitive substring of the path, or of file contents when content greps."}
+                                      :content {:type "string" :enum ["skip" "path" "content" "only"]
+                                                :description "Whether to grep file contents. Default skip."}
+                                      :limit {:type "integer"}
+                                      :include_hidden {:type "boolean"}}
+                         :required []}
+          :handler files/find-files}
+
+         {:name "skill"
+          :description "Load a skill: a packaged set of instructions for a recurring job. action list shows what is installed; action cat with a name returns its instructions. Load the skill before doing the task it covers, because skills encode how this project does things."
+          :default-on? true
+          :input-schema {:type "object"
+                         :properties {:action {:type "string" :enum ["list" "cat"]}
+                                      :name {:type "string" :description "Skill name, for action cat."}}
+                         :required []}
+          :handler (fn [ctx args] (skills/run-skills ctx args))}
+
+         {:name "compact_in_place"
+          :description "Compact your own context when the conversation gets long. action index lists message rows with ids and a gist; action compact takes trim (row ids to shrink to a marker) and collapse ([{from,to,note}] ranges replaced by one summary message); action skip dismisses the nudge."
+          :default-on? true
+          :input-schema {:type "object"
+                         :properties {:action {:type "string" :enum ["index" "compact" "skip"]}
+                                      :trim {:type "array" :items {:type "string"}}
+                                      :collapse {:type "array"
+                                                 :items {:type "object"
+                                                         :properties {:from {:type "string"}
+                                                                      :to {:type "string"}
+                                                                      :note {:type "string"}}
+                                                         :required ["from" "to" "note"]}}}
+                         :required ["action"]}
+          :handler compact/run-compact-in-place}
+
+         {:name "message_user"
+          :description "Send the user a message in the chat. Use it to report something mid-turn, ask a question and wait for the answer, react to an earlier message with one emoji, or attach files. Plain text in a normal reply also reaches the user, so reach for this when you need an answer or want the message to stand out."
+          :default-on? false
+          :input-schema {:type "object"
+                         :properties {:text {:type "string"}
+                                      :reply_to {:type "integer" :description "Message id to reply to, or to react to."}
+                                      :reaction {:type "string" :description "One emoji; needs reply_to."}
+                                      :attachments {:type "array" :items {:type "string"} :description "File paths to attach."}
+                                      :end_turn {:type "boolean" :description "Whether the turn ends after this message."}
+                                      :question {:type "string" :description "Ask the user and wait for the reply."}
+                                      :options {:type "array" :items {:type "string"} :description "Suggested answers."}
+                                      :timeout_ms {:type "integer" :description "How long to wait for the reply."}}
+                         :required []}
+          :handler message-user/run-message-user}
+
          {:name "subagent"
           :description "Spawn a subagent with its own context window to do a self-contained job. Returns only its final message."
           :default-on? false
@@ -299,16 +412,40 @@
                                       :toolset {:type "string" :enum ["default" "readonly"]}
                                       :model {:type "string"}}
                          :required ["prompt"]}
-          :handler run-subagent}]))
+          :handler run-subagent}
 
-(defn tool-defs [toolset]
-  (let [names (case toolset
-                :readonly #{"bash" "patch" "change_dir" "read_image"}
-                nil)]
-    (->> (vals all-tools)
-         (filter :default-on?)
-         (filter #(or (nil? names) (names (:name %))))
-         (mapv llm/->api-tool))))
+         (-> (browse/browser-tool-def)
+             (assoc :default-on? true))]))
+
+(def ^:private readonly-tools
+  #{"bash" "change_dir" "read_image" "read_file" "list_directory" "find_files" "skill"})
+
+(defn- mcp-tools
+  "Tools from configured MCP servers. Only cached definitions are returned:
+  a server that is down costs the agent a tool, never a stuck turn."
+  [working-dir]
+  (try
+    (mcp/ensure-tools! (str working-dir))
+    (catch Throwable _ nil)))
+
+(defn tool-by-name
+  "The tool map for `name`, static tools first, then MCP."
+  [name]
+  (or (get all-tools name)
+      (get (into {} (map (juxt :name identity) (mcp-tools (System/getProperty "user.dir")))) name)))
+
+(defn tool-defs
+  "API tool definitions for a toolset. :readonly offers only tools that cannot
+  write; MCP tools are excluded there because we cannot know what they do."
+  [toolset]
+  (let [wd (System/getProperty "user.dir")
+        static (->> (vals all-tools)
+                    (filter :default-on?)
+                    (filter #(or (not= :readonly toolset) (readonly-tools (:name %))))
+                    (mapv llm/->api-tool))]
+    (into static
+          (when (not= :readonly toolset)
+            (mapv llm/->api-tool (mcp-tools wd))))))
 
 (defn keywordize-args
   "Tool arguments arrive as JSON. Whether they are keywordised upstream is not
@@ -323,12 +460,20 @@
   "Run one tool-use block. Always returns a tool-result block."
   [ctx block]
   (let [{:keys [id name input]} block
-        tool (get all-tools name)]
+        tool (or (get all-tools name)
+                 ;; MCP tools are addressed by SERVER.TOOL and resolved at call
+                 ;; time, because the cache may have been filled after this
+                 ;; conversation started.
+                 (when (str/includes? (str name) ".")
+                   (some #(when (= (:name %) name) %)
+                         (try (mcp/tool-defs (System/getProperty "user.dir"))
+                              (catch Throwable _ nil)))))]
     (try
       (if-not tool
         {:type :tool-result :tool-use-id id :is-error true
          :content [(llm/text-block (str "unknown tool: " name))]}
-        (let [res (try ((:handler tool) ctx (keywordize-args (or input {})))
+        (let [res (try ((:handler tool) (assoc ctx :tool-use-id id)
+                                     (keywordize-args (or input {})))
                        (catch Exception e
                          {:is-error true
                           :content [(llm/text-block (str (.getMessage e)))]}))]
@@ -339,7 +484,11 @@
                               (string? res) [(llm/text-block res)]
                               (vector? res) res
                               :else (vec (:content res)))}
-            (:ui res) (assoc :ui (:ui res)))))
+            (:ui res) (assoc :ui (:ui res))
+            ;; A tool may hand the loop a directive it must act on rather than
+            ;; a message for the model (compact_in_place does this). Passing it
+            ;; through keeps `execute` a transport; the loop decides.
+            (:directive res) (assoc :directive (:directive res)))))
       (catch Throwable t
         {:type :tool-result :tool-use-id id :is-error true
          :content [(llm/text-block (str "tool error: " (.getMessage t)))]}))))

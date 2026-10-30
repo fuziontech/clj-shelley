@@ -44,12 +44,6 @@
                    :content (tool-result-text r)})
           results))))
 
-(defn- reasoning-model?
-  "Models that reject function tools on chat completions unless reasoning is
-  turned off. The gateway says so explicitly in its 400; we avoid provoking it."
-  [model]
-  (boolean (re-find #"(gpt-5|gpt-6|o[134]|codex)" (str model))))
-
 (defn- build-body [{:keys [model system messages tools max-tokens temperature thinking-level]}]
   (cond-> {:model model
            :stream true
@@ -64,10 +58,10 @@
                                     tools))
     max-tokens (assoc :max_completion_tokens max-tokens)
     temperature (assoc :temperature temperature)
-    ;; Reasoning models never reach this function with tools any more (see
-    ;; shelley.llm/send-request); this branch keeps a plain chat call honest if
-    ;; one is made directly.
-    (and (seq tools) (reasoning-model? model)) (assoc :reasoning_effort "none")))
+    ;; No reasoning_effort here on purpose: the gateway rejects every value it
+    ;; offers when tools are present. Reasoning models are routed to
+    ;; /v1/responses by shelley.llm/send-request before they reach this code.
+    ))
 
 (defn- accumulate-tool-call [state {:keys [index id function]}]
   (let [index (or index 0)
