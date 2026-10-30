@@ -27,6 +27,9 @@
         <span>🐚 clj-shelley</span>
         <span class="spacer"></span>
         <button class="btn icon ghost" title="Search conversations" @click="toggleSearch">🔍</button>
+        <button class="btn icon ghost" title="Archive all conversations"
+                v-if="!S.archivedMode && rootConversations.length"
+                @click="archiveAllConversations">🗃</button>
         <button class="btn icon ghost" :title="S.archivedMode ? 'Back to active' : 'Archived'"
                 @click="toggleArchived">{{ S.archivedMode ? '←' : '🗄' }}</button>
       </div>

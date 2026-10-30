@@ -20,6 +20,9 @@ Unless noted, archived conversations are excluded.
 - `GET /api/conversations?limit=&offset=&q=` → `{conversations: [row]}`.
   `q` runs full-text search over message text.
 - `GET /api/conversations/archived` → archived rows.
+- `POST /api/conversations/archive-all` → `{archived: true, count: n}`.
+  Archives every active conversation in one write, subagents included.
+  Idempotent: a second call reports `count: 0`.
 - `GET /api/conversations/snapshot` → `{conversations: [row-with-state], hash}`.
 - `POST /api/conversations/new` → create and start a turn.
   Body: `{message, model, cwd, conversation_options}`.

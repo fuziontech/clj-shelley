@@ -251,6 +251,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     health: ["/api/health"],
     list: ["/api/conversations"],
     archived: ["/api/conversations/archived"],
+    archiveAll: ["/api/conversations/archive-all"],
     create: ["/api/conversations/new", "/api/conversations"],
     get: (id) => ["/api/conversation/" + enc(id), "/api/conversations/" + enc(id)],
     stream: (id) => ["/api/conversation/" + enc(id) + "/stream", "/api/conversations/" + enc(id) + "/events"],
@@ -1561,6 +1562,22 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     }
   }
 
+  async function archiveAllConversations() {
+    if (!confirm("Archive all conversations? They move to the archived view, where you can restore them one by one.")) return;
+    try {
+      const r = await api.post("archive-all", EP.archiveAll, {});
+      const n = (r && r.count) || 0;
+      // Archiving everything leaves nothing to show, so drop the open transcript
+      // rather than leave a conversation the server would now refuse to chat in.
+      if (S.currentId) { S.currentId = null; S.messages = []; disconnectStream(); }
+      S.archivedMode = false;
+      await loadConversations({ quiet: true });
+      toast(n ? "archived " + n + " conversation" + (n === 1 ? "" : "s") : "nothing to archive", n ? "ok" : "info");
+    } catch (e) {
+      toast("archive all: " + e.message, "error");
+    }
+  }
+
   async function removeConversation(conv) {
     const id = conv.conversation_id;
     if (!confirm("Delete “" + (conv.title || id) + "”? This cannot be undone.")) return;
@@ -2209,6 +2226,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
           { id: "theme", icon: S.theme === "dark" ? "☀" : "☾", label: "Toggle theme", key: "", run: () => toggleTheme() },
           { id: "export", icon: "↓", label: "Export conversation as markdown", key: "", run: () => exportMarkdown() },
           { id: "archived", icon: "🗄", label: S.archivedMode ? "Show active conversations" : "Show archived conversations", key: "", run: () => toggleArchived() },
+          { id: "archive-all", icon: "🗃", label: "Archive all conversations", key: "", run: () => archiveAllConversations() },
         ];
         if (S.currentId) {
           a.push({ id: "compact", icon: "⤓", label: "Compact context now", key: "", run: () => compactNow() });
@@ -2629,6 +2647,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
         S, isMobile, log: logEl, input,
         // drawer
         toggleSearch, toggleArchived, onSearchInput, clearSearch, newConversation,
+        archiveAllConversations,
         allTags, rootConversations, conversationGroups, openModal, toggleTheme,
         // header / usage
         headerTitle, shortPath, cancelTurn, exportMarkdown, fmtNum, fmtCost,

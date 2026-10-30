@@ -532,6 +532,15 @@
 (defn archive-conversation! [id] (set-archived! id true))
 (defn unarchive-conversation! [id] (set-archived! id false))
 
+(defn archive-all-conversations!
+  "Archive every conversation that is not already archived, subagents
+  included: the archived view lists them, and leaving children active would
+  split one conversation across both lists. Returns the number of rows
+  changed, so a second call reports 0."
+  []
+  (count (query "UPDATE conversations SET archived = TRUE
+                  WHERE archived = FALSE RETURNING conversation_id")))
+
 (defn tags [id]
   (or (<-json (:tags (query1 "SELECT tags FROM conversations WHERE conversation_id = ?" id))) []))
 

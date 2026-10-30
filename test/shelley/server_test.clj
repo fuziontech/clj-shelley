@@ -405,6 +405,28 @@
     (post* (str "/api/conversation/" id "/unarchive") {})
     (is (listed? "/api/conversations"))))
 
+(deftest archive-all-clears-the-active-list
+  (let [a (conv-id (new-conversation!))
+        b (conv-id (new-conversation!))]
+    (testing "one call archives the active conversations and reports how many"
+      (let [resp (post* "/api/conversations/archive-all" {})
+            body (json-body resp)]
+        (is (= 200 (:status resp)) (:body resp))
+        (is (true? (:archived body)))
+        (is (pos? (:count body)))
+        (is (not (contains? (set (map :id (:conversations (json-body (get* "/api/conversations")))))
+                            a)))))
+    (testing "both conversations are in the archived list"
+      (let [ids (set (map :id (:conversations (json-body (get* "/api/conversations/archived")))))]
+        (is (contains? ids a))
+        (is (contains? ids b))))
+    (testing "a second call is idempotent"
+      (is (= 0 (:count (json-body (post* "/api/conversations/archive-all" {}))))))
+    (testing "an unarchived conversation is restored by the per-id endpoint"
+      (is (= 200 (:status (post* (str "/api/conversation/" a "/unarchive") {}))))
+      (is (some #(= a (get % :id))
+                (:conversations (json-body (get* "/api/conversations"))))))))
+
 (deftest search-finds-the-slug
   (let [id (conv-id (new-conversation!))
         _ (post* (str "/api/conversation/" id "/rename") {"slug" "needle-in-a-haystack"})

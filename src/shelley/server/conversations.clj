@@ -586,6 +586,14 @@
         (notify!)
         (http/ok {"archived" true "conversation" (row (db/get-conversation (:id conv)))})))))
 
+(defn handler-archive-all
+  "POST /api/conversations/archive-all — archive every active conversation in
+  one write. Idempotent: a second call reports 0 and leaves the rest alone."
+  [_]
+  (let [n (db/archive-all-conversations!)]
+    (notify!)
+    (http/ok {"archived" true "count" n})))
+
 (defn handler-unarchive
   [req]
   (let [conv (path-conv req)]
@@ -1030,6 +1038,7 @@
    ["/api/conversation" {:post handler-new}]
    ["/api/conversations/create" {:post handler-new}]
    ["/api/conversations/archived" {:get handler-archived}]
+   ["/api/conversations/archive-all" {:post handler-archive-all}]
    ["/api/conversations/search" {:get handler-search}]
    ["/api/search" {:get handler-search}]
    ["/api/conversations/new" {:post handler-new}]

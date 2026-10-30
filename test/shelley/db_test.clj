@@ -498,6 +498,24 @@
       (db/archive-conversation! (:id b))
       (is (= [(:id b)] (mapv :id (db/list-tagged "research" {:archived true})))))))
 
+(deftest archive-all-covers-the-active-list
+  (let [a (conversation!)
+        b (conversation!)
+        child (conversation! :parent-id (:id a) :user-initiated false)]
+    (db/archive-conversation! (:id b))
+    (testing "every active conversation is archived, subagents included"
+      (is (= 2 (db/archive-all-conversations!)))
+      (is (true? (:archived (db/get-conversation (:id a)))))
+      (is (true? (:archived (db/get-conversation (:id child)))))
+      (is (true? (:archived (db/get-conversation (:id b))))))
+    (testing "the active list is empty and the archived list holds them all"
+      (is (= [] (db/list-conversations)))
+      (is (= #{(:id a) (:id b) (:id child)}
+             (set (map :id (db/list-conversations {:archived true
+                                                   :include-subagents true}))))))
+    (testing "a second call changes nothing"
+      (is (= 0 (db/archive-all-conversations!))))))
+
 (deftest drafts
   (let [draft (db/create-draft-conversation! {:draft "half a thought" :model "m"})]
     (testing "a draft lists like any conversation, carrying its body"
