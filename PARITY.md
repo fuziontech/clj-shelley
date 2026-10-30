@@ -123,3 +123,35 @@ wins — and the row is a bug.
 | Sandboxing of tool execution | yes | done (opt-in bwrap, `SHELLEY_SANDBOX=1`) |
 | Slack / channel integrations | yes | partial (webhook out, signed events in, exe.dev notify; not routed) |
 | Docker/container harness | yes | todo |
+
+## Known gaps (honest list, from the server workstream's final report)
+
+Everything below answers a route that the original also answers. None of it is
+silently missing: each returns an explicit error or an empty result with a note,
+except where stated.
+
+| Area | State |
+| --- | --- |
+| Live sessions / live calls (`/live-session`, `/live-message`, `/call/:id/transcript`) | **stub** — 501 or empty payload. The original streams a live voice call through these. |
+| MCP OAuth (`/mcp/login/:id`, `/mcp/oauth/callback`), `POST /:name/call` | **stub** — 501. stdio and streamable-HTTP servers with static credentials work end to end through the `mcp` tool; interactive OAuth does not. |
+| `POST /api/models/providers` (custom endpoint discovery) | **shallow** — the gateway catalogue is live-fetched and cached; per-provider pagination is not implemented. |
+| `/upgrade`, `/upgrade-headless-shell` | **501** — replacing your own binary from inside the process is a package manager's job. |
+| `/exit` | returns `{status:"not_supported"}` — a library should not signal its host. |
+| `/debug/pprof*`, `/debug/channels/gateway/*` | **stub** — JVM profiling is not Go pprof; use `jcmd`/JFR. `/debug/histograms`, `/stylebook`, `/mcp`, `/conversation-stream`, `/loremipsum` are real. |
+| Turn hooks | the hook *runner* executes on demand and the config is stored; only status-bar hooks run inline during a turn. |
+| `readonly` subagents | `bash` is in the read-only toolset because the original puts it there — a read-only subagent can therefore still write through a shell. |
+| Event-sourced list stream (`/api/stream2`) | real (history + RFC-6902 patches + 25s ping), but the UI polls instead; both work. |
+
+Deviations that are deliberate, not gaps:
+
+* Rows carry both `id` and `conversation_id`, so a client written against either
+  the original or API.md finds its key.
+* `llm_data` is a JSON **string** with inline base64 replaced by
+  `{displayImageUrl: ...}`; the bytes are still in the row and served from
+  `/api/message/:id/image/:i/:sub`.
+* SSE frames carry their type **inside** the JSON and never use `event:` lines, so
+  a plain `EventSource.onmessage` sees everything. `id:` is `seq:<n>`, and
+  `Last-Event-ID`, `?last_event_id=`, `?last_sequence_id=` and `?tail=` are
+  honoured (`tail` together with `last_sequence_id` is a 400).
+* Errors are always `{"error": "..."}` JSON. No HTML error page ever reaches an
+  API client.

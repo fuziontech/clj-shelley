@@ -133,3 +133,22 @@ prints implemented-vs-upstream counts for HTTP routes, tools and migrations, and
 writes `PARITY-GAPS.md`. The point is that parity is measured rather than
 claimed; a renamed route counts as missing so the output is a worklist, not a
 verdict.
+
+## What it does
+
+An agent you can watch work. The pieces, and where they live:
+
+| Piece | Namespace |
+| --- | --- |
+| Turn loop, history, compaction, cancellation | `shelley.loop`, `shelley.compact` |
+| Providers (Anthropic, OpenAI chat + Responses, Gemini, scripted fixture) | `shelley.llm`, `shelley.llm.*` |
+| Tools: bash (background jobs), patch, files, browser, subagent, MCP, skills, iframes | `shelley.tools*` |
+| SQLite persistence, 49 migrations matching the original's schema | `shelley.db` |
+| HTTP + SSE API, 138 routes | `shelley.server*` |
+| Web UI (buildless Vue 3) | `resources/index.html`, `resources/ui/` |
+| CLI: serve, chat, ls, show, new, models, skill | `shelley.cli`, `shelley.main` |
+| User hooks, agent skills, sandboxing, channels | `shelley.hooks`, `shelley.skills`, `shelley.sandbox`, `shelley.channels` |
+| Side conversations that do not pollute the transcript ("btw") | `shelley.btw` |
+
+`PARITY.md` tracks this against the Go original line by line, including the
+parts that are deliberately not ported and why.
