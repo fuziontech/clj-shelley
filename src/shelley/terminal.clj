@@ -8,7 +8,14 @@
   bytes both ways.
 
   Frames are JSON over the websocket: {:type :input|:resize|:output|:exit}."
-  (:require [clojure.java.io :as io]))
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]))
+
+(defn- which [cmd]
+  (some (fn [dir]
+          (let [f (io/file dir cmd)]
+            (when (.canExecute f) (.getPath f))))
+        (str/split (or (System/getenv "PATH") "") #":")))
 
 (defn available?
   "True when we can offer a real terminal on this host."
@@ -16,13 +23,6 @@
   (some? (which "script")))
 
 (defonce sessions (atom {}))
-
-(defn- which [cmd]
-  (some (fn [dir]
-          (let [f (io/file dir cmd)]
-            (when (.canExecute f) (.getPath f))))
-        (clojure.string/split (or (System/getenv "PATH") "") #":")))
-
 
 (defn- reader-loop [session]
   (let [in (.getInputStream (:proc session))
@@ -50,7 +50,7 @@
   (let [script (which "script")
         argv (if script
                ;; -q quiet, -f flush, -c command, /dev/null typescript sink
-               [script "-q" "-f" "-c" (clojure.string/join " " command) "/dev/null"]
+               [script "-q" "-f" "-c" (str/join " " command) "/dev/null"]
                command)
         pb (doto (ProcessBuilder. (vec argv))
              (.directory (io/file (or cwd ".")))

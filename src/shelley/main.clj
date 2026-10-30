@@ -1,6 +1,7 @@
 (ns shelley.main
   "Entry points: `serve` for the web UI, `run` for one-off CLI turns."
-  (:require [shelley.server :as server]
+  (:require [shelley.cli :as cli]
+            [shelley.server :as server]
             [shelley.db :as db]
             [shelley.loop :as loop]
             [shelley.tools :as tools]
@@ -53,10 +54,33 @@
   (server/start! port)
   @(promise))
 
+(defn- usage []
+  (println (str/join "\n"
+                     ["usage: clojure -M:run <command>"
+                      ""
+                      "  serve [port]        run the server and web UI"
+                      "  run \"<prompt>\"      one-off turn against the local agent (no server)"
+                      "  version             server build info"
+                      "  ls                  list conversations on a running server"
+                      "  show <id>           print a conversation transcript"
+                      "  chat <id> \"<msg>\"  send a message and stream the reply"
+                      "  new \"<msg>\"         start a conversation and stream it"
+                      "  cancel <id>         stop a running turn"
+                      "  archive <id> [off]  archive or unarchive"
+                      ""])))
+
 (defn -main [& args]
   (let [[cmd & rest] args]
     (case cmd
       "serve" (serve (Integer/parseInt (or (first rest) (System/getenv "PORT") "8000")))
       "run" (run-cli (str/join " " rest))
-      (do (println "usage: clojure -M:run serve [port] | run \"<prompt>\"")
-          (System/exit 1)))))
+      "version" (do (cli/version) (shutdown-agents))
+      "ls" (do (cli/conversations) (shutdown-agents))
+      "show" (do (cli/show (first rest)) (shutdown-agents))
+      "chat" (do (cli/chat (first rest) (str/join " " (rest rest)))
+                 (shutdown-agents) (System/exit 0))
+      "new" (do (cli/new-conversation (str/join " " rest) {})
+                (shutdown-agents) (System/exit 0))
+      "cancel" (do (cli/cancel (first rest)) (shutdown-agents))
+      "archive" (do (cli/archive (first rest) (not= "off" (second rest))) (shutdown-agents))
+      (do (usage) (System/exit 1)))))
