@@ -3,6 +3,11 @@
   static page. No framework — the whole UI is a single file that speaks JSON
   and EventSource."
   (:require [shelley.compact :as compact]
+            [shelley.server.files-api :as files-api]
+            [shelley.server.git-api :as git-api]
+            [shelley.server.term-api :as term-api]
+            [shelley.usage :as usage]
+            [shelley.git :as git]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
             [clojure.java.io :as io]
@@ -235,8 +240,32 @@
 
 (defn health [_] (json-response 200 {:status "ok" :model default-model}))
 
-(def routes
-  [["/" {:get index}]
+(def capabilities
+  ["thinking-levels" "queued-messages" "compaction" "background-jobs"
+   "mcp" "subagents" "search" "tags" "terminal" "git"])
+
+(defn version [_]
+  (json-response 200 {:tag "0.1.0-clj"
+                      :commit (or (:commit (git/head (System/getProperty "user.dir"))) "unknown")
+                      :capabilities capabilities}))
+
+(defn usage-endpoint
+  "Token and cost totals for one conversation, summed from stored message
+  usage. This is what the UI's context bar reads."
+  [{:keys [params]}]
+  (if-let [conv (db/get-conversation (:conversation params))]
+    (let [msgs (db/messages (:id conv) {})
+          usages (keep :usage msgs)]
+      (json-response 200 {:conversation_id (:id conv)
+                          :usage (usage/summarize usages (or (:model conv) default-model))
+                          :estimated-tokens (shelley.llm/estimate-tokens msgs)
+                          :message-count (count msgs)}))
+    (json-response 404 {:error "not found"})))
+
+(def core-routes
+  [["/version" {:get version}]
+   ["/api/usage" {:get usage-endpoint}]
+   ["/" {:get index}]
    ["/api/health" {:get health}]
    ["/api/conversations" {:get list-conversations :post create-conversation}]
    ["/api/conversations/:id" {:get get-conversation}]
@@ -245,6 +274,36 @@
    ["/api/conversations/:id/events" {:get events}]
    ["/iframe/:id" {:get iframe-file}]
    ["/api/iframes/:id" {:get get-iframe}]])
+
+(def routes
+  "Everything routable: core API, workspace endpoints, and the other modules
+  that bring their own tables."
+  (into core-routes (concat files-api/routes git-api/routes term-api/routes)))
+
+;; ---------------------------------------------------------------------------
+;; Static UI assets
+
+(defn- static-uri?
+  "The UI lives under /ui/ so that index.html can be replaced wholesale without
+  the server caring."
+  [uri]
+  (str/starts-with? uri "/ui/"))
+
+(defn- serve-static [uri]
+  (let [rel (subs uri 4)
+        f (io/file "resources/ui" rel)]
+    (if (and (.isFile f) (not (str/includes? rel "..")))
+      {:status 200
+       :headers {"content-type" (or ({"js" "application/javascript"
+                                      "css" "text/css"
+                                      "html" "text/html; charset=utf-8"
+                                      "json" "application/json"
+                                      "svg" "image/svg+xml"
+                                      "woff2" "font/woff2"}
+                                     (last (str/split (str rel) #"\.")))
+                                  "application/octet-stream")}
+       :body (slurp f)}
+      {:status 404 :body "not found"})))
 
 ;; ---------------------------------------------------------------------------
 ;; Minimal router (path pattern -> handler)
@@ -278,10 +337,12 @@
 
 (defn handler [req]
   (try
-    (if-let [[h params] (match-route (:request-method req) (:uri req))]
-      (let [req (assoc req :params (merge (:params req) params))]
-        (h req))
-      {:status 404 :headers {"content-type" "application/json"} :body "{\"error\":\"not found\"}"})
+    (if (static-uri? (:uri req))
+      (serve-static (:uri req))
+      (if-let [[h params] (match-route (:request-method req) (:uri req))]
+        (let [req (assoc req :params (merge (:params req) params))]
+          (h req))
+        {:status 404 :headers {"content-type" "application/json"} :body "{\"error\":\"not found\"}"}))
     (catch Exception e
       (binding [*out* *err*]
         (println "request failed:" (.getMessage e))
