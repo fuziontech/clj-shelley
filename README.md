@@ -34,6 +34,10 @@ shelley.server       JSON API + SSE + UI host
 shelley.git          repository introspection
 shelley.usage        token and cost accounting
 shelley.terminal     pty sessions for the exec pane
+shelley.skills       Agent Skills discovery and prompt listing
+shelley.hooks        user hooks (system prompt, messages, status bar)
+shelley.sandbox      opt-in bubblewrap isolation for tool execution
+shelley.channels     Slack and exe.dev notification delivery
 ```
 
 The central design decision, inherited from the original: **conversations are
@@ -81,7 +85,40 @@ SQLite as a string (which silently sent empty messages), thinking blocks losing
 the signature Anthropic requires on replay, cancellation not actually stopping
 the loop, and string-keyed tool arguments.
 
+## Skills and hooks
+
+Skills are `SKILL.md` directories discovered in `resources/skills`,
+`~/.config/agents/skills`, `~/.agents/skills`, `~/.config/clj-shelley/skills`
+and `./.shelley/skills`. Only names and descriptions enter the system prompt;
+the body is read on demand.
+
+```bash
+clojure -M:run skill            # list what is discoverable
+clojure -M:run skill cat schedule
+```
+
+Hooks are executables under `~/.config/shelley/hooks/`; see `HOOKS.md` for the
+five hook points and their stdin/stdout contracts.
+
 ## Safety
 
-`bash` runs with the privileges of the process. Do not point this at a machine
-you care about.
+Tool execution runs with the privileges of the process by default, which is what
+makes an agent able to install packages, run tests, and fix its own failures.
+
+Setting `SHELLEY_SANDBOX=1` wraps `bash` in bubblewrap instead: the workspace
+and `/tmp` are writable, the rest of the filesystem is read-only, and `/tmp` is
+private to the command. Network stays shared, because cutting it off breaks
+package installs, git remotes, and the model calls tools make.
+
+Do not point either mode at a machine you care about. Do not run it as root.
+
+## Parity tracking
+
+```bash
+clojure -M scripts/parity.clj /path/to/boldsoftware/shelley
+```
+
+prints implemented-vs-upstream counts for HTTP routes, tools and migrations, and
+writes `PARITY-GAPS.md`. The point is that parity is measured rather than
+claimed; a renamed route counts as missing so the output is a worklist, not a
+verdict.
