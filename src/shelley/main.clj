@@ -6,6 +6,7 @@
             [shelley.loop :as loop]
             [shelley.tools :as tools]
             [shelley.llm :as llm]
+            [shelley.skills :as skills]
             [clojure.string :as str]))
 
 (defn- print-event [e]
@@ -35,7 +36,8 @@
              :base-url (llm/base-url)}
         result (loop/run-turn
                 {:model server/default-model
-                 :system [server/system-prompt (str "Working directory: " @cwd)]
+                 :system (cond-> [server/system-prompt (str "Working directory: " @cwd)]
+                           (skills/prompt-section) (conj (skills/prompt-section)))
                  :messages [(llm/user-message prompt)]
                  :tools (tools/tool-defs nil)
                  :ctx ctx
@@ -67,6 +69,8 @@
                       "  new \"<msg>\"         start a conversation and stream it"
                       "  cancel <id>         stop a running turn"
                       "  archive <id> [off]  archive or unarchive"
+                      "  skill list          list discoverable skills"
+                      "  skill cat <name>    print a skill's instructions"
                       ""])))
 
 (defn -main [& args]
@@ -83,4 +87,11 @@
                 (shutdown-agents) (System/exit 0))
       "cancel" (do (cli/cancel (first rest)) (shutdown-agents))
       "archive" (do (cli/archive (first rest) (not= "off" (second rest))) (shutdown-agents))
+      "skill" (case (first rest)
+                "cat" (if-let [s (skills/find-skill (second rest))]
+                        (do (print (:body s)) (flush))
+                        (do (println "no such skill:" (second rest)) (System/exit 1)))
+                ;; default: list
+                (doseq [{:keys [name description]} (skills/discover)]
+                  (println (format "%-28s %s" name description))))
       (do (usage) (System/exit 1)))))
