@@ -56,7 +56,7 @@
 
 (defn our-migrations [root]
   (->> (read-root (str root "/src/shelley/db"))
-       (mapcat (fn [f] (map second (re-seq #"\"([0-9]{3}-[a-z0-9-]+)\"" (slurp f)))))
+       (mapcat (fn [f] (map second (re-seq #"\"([0-9]{3}-[a-z0-9-]+\.sql)\"" (slurp f)))))
        set))
 
 ;; ---------------------------------------------------------------------------
