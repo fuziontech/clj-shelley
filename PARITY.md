@@ -115,7 +115,8 @@ wins — and the row is a bug.
 
 | Feature | Original | Here |
 | --- | --- | --- |
-| User hooks (`~/.config/shelley/hooks/*`) | 5 hooks, stdin/stdout | done |
+| User hooks (`~/.config/shelley/hooks/*`) | 5 hooks, stdin/stdout | done — all five run inside a turn (system-prompt, new-conversation, chat-message, end-of-turn, status-bar) |
+| Slash commands (`hooks/slash/<cmd>`) | yes | done (stdout replaces the message; silence consumes it) |
 | Agent Skills discovery + prompt listing | `skills/` | done |
 | CLI: serve/run | yes | done |
 | CLI: upgrade, db lock, highlights, exescroll | yes | partial (lock, skill, hooks, models, port-file) |
@@ -134,11 +135,10 @@ except where stated.
 | --- | --- |
 | Live sessions / live calls (`/live-session`, `/live-message`, `/call/:id/transcript`) | **stub** — 501 or empty payload. The original streams a live voice call through these. |
 | MCP OAuth (`/mcp/login/:id`, `/mcp/oauth/callback`), `POST /:name/call` | **stub** — 501. stdio and streamable-HTTP servers with static credentials work end to end through the `mcp` tool; interactive OAuth does not. |
-| `POST /api/models/providers` (custom endpoint discovery) | **shallow** — the gateway catalogue is live-fetched and cached; per-provider pagination is not implemented. |
 | `/upgrade`, `/upgrade-headless-shell` | **501** — replacing your own binary from inside the process is a package manager's job. |
 | `/exit` | returns `{status:"not_supported"}` — a library should not signal its host. |
 | `/debug/pprof*`, `/debug/channels/gateway/*` | **stub** — JVM profiling is not Go pprof; use `jcmd`/JFR. `/debug/histograms`, `/stylebook`, `/mcp`, `/conversation-stream`, `/loremipsum` are real. |
-| Turn hooks | the hook *runner* executes on demand and the config is stored; only status-bar hooks run inline during a turn. |
+| Model provider connections (`/api/model-providers` CRUD, per-provider discovery) | **shallow** — the gateway catalogue is live and cached, and custom models can be added; storing third-party provider *connections* with their own credentials is not implemented. |
 | `readonly` subagents | `bash` is in the read-only toolset because the original puts it there — a read-only subagent can therefore still write through a shell. |
 | Event-sourced list stream (`/api/stream2`) | real (history + RFC-6902 patches + 25s ping), but the UI polls instead; both work. |
 
