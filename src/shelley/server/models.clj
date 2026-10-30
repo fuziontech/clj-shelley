@@ -361,6 +361,12 @@
                             (for [m (get custom p)]
                               (custom->api m))))})))))
 
+(def ^:private resold-deepseek
+  "DeepSeek served by a third party. This deployment reaches DeepSeek on its own
+  platform API, and listing the resold entries invites picking one by mistake:
+  the two are the same model name and very different data paths."
+  #{"fireworks/deepseek-v4p1-flash-1017" "fireworks/deepseek-v4p1-flash"})
+
 (defn- models-payload
   "The model catalogue as one object. Shared by /api/models and
   /api/model-providers, which differ only in what they add."
@@ -374,7 +380,7 @@
                                       "max_output_tokens" (:max_output_tokens %)
                                       "thinking" (:thinking %) "images" (:images %)
                                       "source" (name (:source cat))})
-                                   (:models cat))
+                                   (remove #(contains? resold-deepseek (:id %)) (:models cat)))
                               (map custom->api (db/list-models))))
                "default_model" (default-model-id)
                "source" (name (:source cat))
