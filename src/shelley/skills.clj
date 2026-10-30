@@ -140,3 +140,22 @@
    (let [skills (enabled-skills disabled cwd)]
      (when (seq skills)
        (str (install-prompt skills) "\n\n" (to-prompt-xml skills))))))
+
+(defn create-template!
+  "Write a new skill directory with a SKILL.md to fill in, and return its path.
+
+  Skills are only useful if writing one is a single command; otherwise nobody
+  writes the second one."
+  [name]
+  (when (str/blank? (str name))
+    (throw (ex-info "a skill needs a name" {})))
+  (let [safe (str/replace (str name) #"[^A-Za-z0-9_-]" "-")
+        dir (io/file (System/getProperty "user.dir") "skills" safe)
+        f (io/file dir "SKILL.md")]
+    (when (.exists f)
+      (throw (ex-info (str "skill already exists: " (.getPath f)) {})))
+    (.mkdirs dir)
+    (spit f (str "---\nname: " safe "\ndescription: Use when …\n---\n\n"
+                 "# " safe "\n\nWhat to do, step by step. Commands the agent should run,\n"
+                 "files it should read, and the failure modes worth checking.\n"))
+    (.getPath f)))

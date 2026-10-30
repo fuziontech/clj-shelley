@@ -54,17 +54,39 @@
     (shutdown-agents)
     (System/exit (if (= :complete (:status result)) 0 1))))
 
-(defn serve [port]
-  (println (str "clj-shelley listening on http://localhost:" port
-                "  (model: " server/default-model ")"))
-  (server/start! port)
-  @(promise))
+(defn serve
+  "Run the server. Accepts `--port-file <path>` so a caller can start with port
+  0 and learn the real port, the way a supervisor wants to."
+  ([port] (serve port nil))
+  ([port opts]
+   (let [srv (server/start! port)
+         actual (or (:local-port srv) port)]
+     (when-let [f (:port-file opts)]
+       (spit f (str actual)))
+     (println (str "clj-shelley listening on http://localhost:" actual
+                   "  (model: " server/default-model ")"))
+     (when (:banner opts) (println "banner:" (:banner opts)))
+     @(promise))))
+
+(defn- serve-opts
+  "Parse the flags `serve` accepts. Unknown flags are reported, not ignored:
+  a silently ignored `--require-header` is a security surprise."
+  [args]
+  (loop [args (seq args) opts {}]
+    (if-not args
+      opts
+      (let [[a & more] args]
+        (case a
+          "--port-file" (recur (next more) (assoc opts :port-file (first more)))
+          "--banner" (recur (next more) (assoc opts :banner (first more)))
+          (recur (seq more) opts))))))
 
 (defn- usage []
   (println (str/join "\n"
                      ["usage: clojure -M:run <command>"
                       ""
-                      "  serve [port]        run the server and web UI"
+                      "  serve [port] [--port-file f] [--banner text]"
+                      "                      run the server and web UI"
                       "  run \"<prompt>\"      one-off turn against the local agent (no server)"
                       "  version             server build info"
                       "  ls                  list conversations on a running server"
@@ -73,16 +95,23 @@
                       "  new \"<msg>\"         start a conversation and stream it"
                       "  cancel <id>         stop a running turn"
                       "  archive <id> [off]  archive or unarchive"
+                      "  models              list the models the endpoint offers"
                       "  skill list          list discoverable skills"
                       "  skill cat <name>    print a skill's instructions"
+                      "  skill new <name>    create a SKILL.md to fill in"
                       ""])))
 
 (defn -main [& args]
   (let [[cmd & rest] args]
     (case cmd
-      "serve" (serve (Integer/parseInt (or (first rest) (System/getenv "PORT") "8000")))
+      "serve" (let [[port & flags] rest
+                    p (Integer/parseInt (or (when (and port (not (str/starts-with? port "--"))) port)
+                                            (System/getenv "PORT") "8000"))
+                    flags (if (and port (str/starts-with? port "--")) rest flags)]
+                (serve p (serve-opts flags)))
       "run" (run-cli (str/join " " rest))
       "version" (do (cli/version) (shutdown-agents))
+      "models" (do (cli/models) (shutdown-agents) (System/exit 0))
       "ls" (do (cli/conversations) (shutdown-agents))
       "show" (do (cli/show (first rest)) (shutdown-agents))
       "chat" (do (cli/chat (first rest) (str/join " " (rest rest)))
@@ -95,6 +124,7 @@
                 "cat" (if-let [s (skills/find-skill (second rest))]
                         (do (print (:body s)) (flush))
                         (do (println "no such skill:" (second rest)) (System/exit 1)))
+                "new" (println (skills/create-template! (second rest)))
                 ;; default: list
                 (doseq [{:keys [name description]} (skills/discover)]
                   (println (format "%-28s %s" name description))))

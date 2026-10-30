@@ -128,3 +128,29 @@
 (defn archive [id archived?]
   (http :post (str "/api/conversation/" id "/archive") {:archived (boolean archived?)})
   (println (if archived? "archived" "unarchived")))
+
+;; ---------------------------------------------------------------------------
+;; Models
+;;
+;; Listing models is a question for the gateway, not for our server: the server
+;; may not be running, and the answer comes from wherever the LLM lives.
+
+(defn models
+  "Print the model ids the configured endpoint offers."
+  [& _]
+  (let [base (or (System/getenv "LLM_BASE_URL") "https://llm-exe-proxy.int.exe.xyz")
+        url (str (str/replace base #"/+$" "") "/models.json")]
+    (try
+      (let [client (java.net.http.HttpClient/newHttpClient)
+            req (-> (java.net.http.HttpRequest/newBuilder (java.net.URI/create url))
+                    (.timeout (java.time.Duration/ofSeconds 20))
+                    (.GET) (.build))
+            resp (.send client req (java.net.http.HttpResponse$BodyHandlers/ofString))
+            data (json/parse-string (.body resp) true)
+            ids (or (:data data) (:models data) [])
+            names (sort (keep #(or (:id %) (:name %) (when (string? %) %)) ids))]
+        (if (seq names)
+          (doseq [n names] (println n))
+          (println "no models listed by" url)))
+      (catch Exception e
+        (println "could not reach" url "-" (.getMessage e))))))
