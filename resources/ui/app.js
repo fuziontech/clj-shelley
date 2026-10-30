@@ -263,7 +263,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     retry: (id) => ["/api/conversation/" + enc(id) + "/retry"],
     options: (id) => ["/api/conversation/" + enc(id) + "/options"],
     remove: (id) => ["/api/conversation/" + enc(id), "/api/conversations/" + enc(id)],
-    usage: (id) => ["/api/usage?conversation=" + enc(id), "/api/conversations/" + enc(id) + "/usage"],
+    usage: (id) => ["/api/conversation/" + enc(id) + "/usage", "/api/usage?conversation=" + enc(id)],
     findFiles: (q, cwd) => ["/api/find-files?q=" + enc(q) + "&cwd=" + enc(cwd || "") + "&limit=60"],
     listDir: (p, cwd) => ["/api/list-directory?path=" + enc(p || ".") + "&cwd=" + enc(cwd || "")],
     file: (p) => ["/api/file?path=" + enc(p) + "&cwd=" + enc(rootFor(p))],
@@ -605,6 +605,18 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     return out;
   }
 
+  // The tag beside a tool call. Short, because it repeats on every step and the
+  // transcript should read as a list of actions, not a list of nouns.
+  const TOOL_TAGS = {
+    bash: "bash", patch: "patch", change_dir: "cd", read_image: "image",
+    llm_one_shot: "llm", output_iframe: "iframe", subagent: "agent",
+    message_user: "ask", browser: "browser", compact_in_place: "compact",
+  };
+  function toolTag(name) {
+    const n = String(name || "tool");
+    return TOOL_TAGS[n] || n.replace(/^mcp__/, "").replace(/_/g, "-");
+  }
+
   function summaryOfInput(name, input) {
     if (input == null) return "";
     if (typeof input === "string") return input.replace(/\s+/g, " ").slice(0, 140);
@@ -874,7 +886,11 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
         const text = String(ev.text || "");
         if (text) {
           S.messages.push({ id: "user-" + Date.now(), type: "user", blocks: [{ kind: "text", text }], text, usage: null, retryable: false, createdAt: Date.now() });
-          renderSoon(true);
+          // Follow only if the reader is already at the bottom. A message can
+          // arrive from another tab, a queued send, or a finished background
+          // job; none of those is a reason to drag someone away from what they
+          // are reading.
+          renderSoon();
         }
         break;
       }
@@ -898,7 +914,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
         S.running = false;
         S.live = null;
         toast(text, "error");
-        renderSoon(true);
+        renderSoon();
         break;
       }
       case "compaction-start":
@@ -924,7 +940,9 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
         S.queue = [];
         // The database is the truth: re-read the transcript rather than trusting
         // the deltas we accumulated.
-        refreshTranscript(true);
+        // Not forced: a turn ending must not drag a reader who scrolled up back
+        // to the bottom. If they are at the bottom, renderSoon re-pins anyway.
+        refreshTranscript(false);
         refreshUsage();
         loadConversations();
         break;
@@ -995,7 +1013,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
       sse.fails = 0;
       // Events published while the connection was down are gone, so a
       // reconnection re-reads the transcript instead of trusting its own tail.
-      if (rejoined) { refreshTranscript(true); refreshUsage(); }
+      if (rejoined) { refreshTranscript(false); refreshUsage(); }
     };
     es.onmessage = (e) => onStreamMessage(e);
     for (const name of KNOWN_EVENTS) {
@@ -1080,6 +1098,30 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     const el = logEl.value;
     if (!el) return;
     atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  function jumpToBottom() {
+    // A deliberate jump is the one case where scrolling smooth is right: the
+    // reader asked to go somewhere and should see the motion.
+    atBottom.value = true;
+    scrollToBottom(true);
+    nextTick(() => renderSoon(true));
+  }
+
+  // The transcript changes height without any event we emit: an image loads, a
+  // tool card is expanded, a long line wraps when the window narrows. Watching
+  // the element itself is the only way to keep the bottom pinned through that,
+  // and it is what "tracks the bottom" means in practice.
+  let logObserver = null;
+  function watchLogSize() {
+    const el = logEl.value;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    if (logObserver) logObserver.disconnect();
+    const inner = el.firstElementChild || el;
+    logObserver = new ResizeObserver(() => {
+      if (atBottom.value) scrollToBottom(false);
+    });
+    logObserver.observe(inner);
   }
 
   // ================================================================ lifecycle
@@ -1288,10 +1330,15 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     const meta = S.usageMeta || {};
     const input = num(u.input_tokens, u["input-tokens"], u.inputTokens, u.prompt_tokens, u.tokens_in, u.input);
     const output = num(u.output_tokens, u["output-tokens"], u.outputTokens, u.completion_tokens, u.tokens_out, u.output);
-    const cached = num(u.cache_read_input_tokens, u["cache-read-tokens"], u.cached_tokens, u.cache_read, u.cached) +
-      num(u.cache_creation_input_tokens, u["cache-write-tokens"], u.cache_write);
-    const cost = num(u.cost_usd, u["cost-usd"], u.cost, u.total_cost, u.costUSD);
-    const recorded = input + output + cached + cost > 0;
+    const cached = num(u.cache_read_input_tokens, u.cache_read_tokens, u["cache-read-tokens"],
+                       u.cached_tokens, u.cache_read, u.cached) +
+      num(u.cache_creation_input_tokens, u.cache_write_tokens, u["cache-write-tokens"], u.cache_write);
+    // A model with no list price reports null, and that is not "$0.00": the
+    // difference between free and unknown matters to whoever pays the bill.
+    const costRaw = [u.cost_usd, u["cost-usd"], u.cost, u.total_cost, u.costUSD]
+      .find((v) => v !== undefined && v !== null && v !== "");
+    const cost = costRaw === undefined ? null : Number(costRaw);
+    const recorded = input + output + cached + (cost || 0) > 0;
     // A server-side estimate of 0 is "unknown", not "empty": fall through to the
     // tokens we actually counted, or the meter reads ctx 0 beside 8.3k in.
     const contextTokens = num(u.context_tokens, u.contextTokens, u.context)
@@ -2081,9 +2128,12 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
     data() { return { manual: null }; },
     computed: {
       open() {
+        // Collapsed unless the reader opened it. A running tool is not a reason
+        // to take over the transcript: the tag and a pulsing dot say enough.
         if (this.manual !== null) return this.manual;
-        return !this.item.result || this.item.result.isError;
+        return Boolean(this.item.result && this.item.result.isError);
       },
+      tag() { return toolTag(this.item.name); },
       preview() { return summaryOfInput(this.item.name, this.item.input); },
       inputText() { return inputText(this.item.input); },
       inputDiff() { return looksLikeDiff(this.inputText); },
@@ -2561,6 +2611,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
 
       onMounted(async () => {
         applyTheme(S.theme);
+        nextTick(watchLogSize);
         window.addEventListener("keydown", onGlobalKey);
         // Usage climbs during a turn; poll it only while one is running.
         timers.push(setInterval(() => { if (S.running) refreshUsage(); }, 3000));
@@ -2583,7 +2634,7 @@ const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onUnmoun
         headerTitle, shortPath, cancelTurn, exportMarkdown, fmtNum, fmtCost,
         usage, ctxClass, ctxPct, compactNow,
         // transcript
-        groups, liveGroup: live, atBottom, onLogScroll, scrollToBottom, dismissToast,
+        groups, liveGroup: live, atBottom, onLogScroll, scrollToBottom, jumpToBottom, dismissToast,
         // composer
         placeholder, canSend, send, autoGrow, onKeydown, onPaste, onDrop, onFiles,
         setModel, setThinking, thinkingLevels,

@@ -73,6 +73,19 @@ echo "== models and settings"
 check "model providers"    200 "$BASE/api/model-providers"
 check "settings"           200 "$BASE/api/settings"
 
+echo "== interface"
+# These are the behaviours a reader depends on but no API response reveals.
+curl -s -m 10 "$BASE/ui/app.js" -o /tmp/e2e-ui.js
+curl -s -m 10 "$BASE/" -o /tmp/e2e-index.html
+grep -q "jumpToBottom" /tmp/e2e-ui.js \
+  && ok "chat has a jump-to-latest control" || bad "no jump-to-latest control"
+grep -q "ResizeObserver" /tmp/e2e-ui.js \
+  && ok "transcript tracks its own height" || bad "no height tracking: the bottom will drift"
+grep -q 'class="tool-tag"' /tmp/e2e-index.html \
+  && ok "tool calls carry a tag" || bad "tool calls are untagged"
+grep -q "scrub-bottom" /tmp/e2e-index.html \
+  && ok "scrub button is in the markup" || bad "scrub button missing"
+
 if [ -n "${CID:-}" ]; then
   echo "== conversation controls"
   check "archive"          200 "$BASE/api/conversation/$CID/archive" POST '{"archived":true}'

@@ -118,7 +118,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .drawer-foot { border-top: 1px solid var(--line); padding: 8px; display: flex; gap: 6px; align-items: center; }
 
 /* ------------------------------------------------------------------ main */
-main { display: flex; flex-direction: column; min-width: 0; height: 100%; background: var(--bg); }
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%;
+  overflow: hidden; background: var(--bg); }
 .topbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line);
   background: var(--panel); min-height: 48px; }
 .topbar .title { font-weight: 650; font-size: 14px; }
@@ -132,7 +133,8 @@ main { display: flex; flex-direction: column; min-width: 0; height: 100%; backgr
 .ctx-meter.warn > i { background: var(--warn); }
 .ctx-meter.hot > i { background: var(--err); }
 
-.log { flex: 1; overflow-y: auto; padding: 22px 22px 8px; scroll-behavior: smooth; overscroll-behavior: contain; }
+.log-wrap { position: relative; flex: 1 1 0%; min-height: 0; display: flex; }
+.log { flex: 1 1 0%; min-height: 0; overflow-y: auto; padding: 22px 22px 8px; scroll-behavior: smooth; overscroll-behavior: contain; }
 .log-inner { max-width: 900px; margin: 0 auto; }
 .empty { color: var(--dim); text-align: center; padding: 60px 20px; }
 .empty h2 { color: var(--fg); font-size: 17px; margin: 0 0 6px; }
@@ -203,15 +205,36 @@ main { display: flex; flex-direction: column; min-width: 0; height: 100%; backgr
   white-space: pre-wrap; font-size: 13px; font-style: italic; max-height: 380px; overflow: auto; }
 
 /* tool cards */
-.tool { border: 1px solid var(--line); border-radius: 9px; margin: 7px 0; background: var(--panel);
+/* Tool calls are the agent's footsteps, not its work product: one compact line
+   each, tagged with the tool name, expandable when you want the arguments. */
+.tool-tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .02em; padding: 1px 6px;
+  border-radius: 5px; border: 1px solid var(--line); background: var(--panel-3); color: var(--dim);
+  flex: 0 0 auto; text-transform: lowercase; }
+.tool.running .tool-tag { color: var(--accent); border-color: var(--accent-dim); }
+.tool.err .tool-tag { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.tool-state { font-size: 10.5px; color: var(--dim-2); flex: 0 0 auto; }
+.tool-state.err { color: var(--err); }
+.tool-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite; }
+
+/* Jump back to the newest message: sits over the transcript, inside the column. */
+.scrub-bottom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 15;
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px;
+  font-size: 11.5px; color: var(--fg); background: var(--panel-3);
+  border: 1px solid var(--line); box-shadow: var(--shadow); cursor: pointer; }
+.scrub-bottom:hover { background: var(--panel-2); border-color: var(--accent-dim); }
+.scrub-arrow { color: var(--accent); }
+
+.tool { border: 1px solid var(--line); border-radius: 9px; margin: 5px 0; background: var(--panel);
   overflow: hidden; }
 .tool.err { border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
-.tool > summary { padding: 7px 11px; cursor: pointer; display: flex; gap: 8px; align-items: center;
+.tool > summary { padding: 4px 9px; cursor: pointer; display: flex; gap: 7px; align-items: center;
   list-style: none; font-family: var(--mono); font-size: 12.5px; }
 .tool > summary::-webkit-details-marker { display: none; }
 .tool > summary:hover { background: var(--panel-2); }
 .tool-name { color: var(--accent); font-weight: 600; }
-.tool-preview { color: var(--dim); min-width: 0; flex: 1; white-space: nowrap; overflow: hidden;
+.tool-preview { color: var(--dim); min-width: 0; flex: 1; font-family: var(--mono); font-size: 11.5px;
+  white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; font-size: 12px; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 20px; border: 1px solid var(--line);
   color: var(--dim); flex: none; font-family: var(--sans, inherit); }
@@ -242,6 +265,7 @@ main { display: flex; flex-direction: column; min-width: 0; height: 100%; backgr
 .cursor { display: inline-block; width: 7px; height: 15px; background: var(--accent); vertical-align: -2px;
   animation: blink 1s steps(2) infinite; margin-left: 1px; }
 @keyframes blink { 50% { opacity: 0; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .queued-strip { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--warn);
   padding: 6px 10px; border: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
   border-radius: 8px; margin: 8px 0; }

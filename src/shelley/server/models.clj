@@ -485,7 +485,11 @@
   endpoint answered zeros with `conversation_id: null`, which reads as
   a free conversation rather than a missing one."
   [req]
-  (let [conv-id (http/path-param req :id)
+  ;; Two shapes reach this handler: the REST-ish path and `?conversation=`,
+  ;; which is what a client that guesses at the API tries first. Answering
+  ;; "not found" to the second made the usage bar read "unavailable" on a
+  ;; conversation that had plenty of usage.
+  (let [conv-id (or (http/path-param req :id) (get (http/query-params req) :conversation))
         conv (db/get-conversation conv-id)]
     (if (nil? conv)
       (http/not-found "conversation not found")

@@ -109,6 +109,7 @@
       <button class="btn sm ghost" title="Compact context" @click="compactNow" v-if="!S.running">compact</button>
     </div>
 
+    <div class="log-wrap">
     <div class="log" ref="log" @scroll="onLogScroll">
       <div class="log-inner">
         <div class="empty" v-if="!S.currentId">
@@ -137,8 +138,13 @@
       </div>
     </div>
 
-    <button class="btn sm" v-if="!atBottom" @click="scrollToBottom(true)"
-            style="position:fixed;right:28px;bottom:150px;z-index:20;box-shadow:var(--shadow)">↓ newest</button>
+    <button class="scrub-bottom" v-if="!atBottom" @click="jumpToBottom()"
+            title="Scroll to the newest message" aria-label="Scroll to the newest message">
+      <span class="scrub-arrow">↓</span>
+      <span v-if="S.running">working</span>
+      <span v-else>latest</span>
+    </button>
+    </div>
 
     <!-- ============================ composer ============================ -->
     <footer class="composer-wrap">
@@ -245,16 +251,14 @@
 
 <!-- -------------------------------------------------------------- tool card -->
 <template id="tpl-tool">
-<details class="tool" :class="{err: item.result && item.result.isError}" :open="open" @toggle="onToggle">
+<details class="tool" :class="{err: item.result && item.result.isError, running: !item.result}" :open="open" @toggle="onToggle">
   <summary>
-    <span style="color:var(--dim)">⚙</span>
-    <span class="tool-name">{{ item.name }}</span>
-    <span class="tool-preview">{{ preview }}</span>
+    <span class="tool-tag" :title="'tool: ' + item.name">{{ tag }}</span>
+    <span class="tool-preview" :title="preview">{{ preview }}</span>
     <span class="badge count" v-if="item.count > 1">×{{ item.count }}</span>
-    <span class="badge run" v-if="!item.result">running…</span>
-    <span class="badge" :class="item.result && item.result.isError ? 'err' : 'ok'" v-else>
-      {{ item.result.isError ? 'error' : 'ok' }}</span>
-    <span class="badge" v-if="elapsed">{{ elapsed }}</span>
+    <span class="tool-state" v-if="!item.result"><span class="tool-dot"></span></span>
+    <span class="tool-state err" v-else-if="item.result.isError">failed</span>
+    <span class="tool-state dim" v-if="elapsed">{{ elapsed }}</span>
   </summary>
   <div class="tool-body">
     <div class="tool-sec" v-if="inputText">

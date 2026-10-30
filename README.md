@@ -10,6 +10,12 @@ is the scoreboard for what has been ported and what has not.
 ## What it does
 
 - Streams from the model token by token.
+- Shows tool calls as one compact line each, tagged with the tool name and the
+  command, collapsed unless you open them — the transcript reads as a list of
+  actions rather than a stack of cards.
+- Keeps the newest message in view as the transcript grows, and stops doing that
+  the moment you scroll up. A "↓ latest" button appears when you are away from
+  the bottom, saying `working` while a turn is still running.
 - Calls tools, several per round, **in parallel**, and feeds the results back.
 - Loops until the model stops asking for tools, splicing in user messages typed
   mid-turn and compacting context when it approaches the model's limit.
