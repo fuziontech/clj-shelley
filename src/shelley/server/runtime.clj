@@ -16,6 +16,7 @@
   Everything else — the transcript, the model, the cwd — lives in SQLite, which
   is why a restart loses only what was in flight."
   (:require [shelley.compact :as compact]
+            [shelley.hooks :as hooks]
             [shelley.server.http :as http-util]
             [shelley.db :as db]
             [shelley.llm :as llm]
@@ -231,11 +232,30 @@
                                :content (:content (runtime-user-message text))}
                         queued-id (assoc :remove-queued-id queued-id))))
 
+(defn- final-text
+  "The agent's last words in a finished turn, for the end-of-turn hook."
+  [result]
+  (let [msgs (:messages result)
+        ;; The loop's own role name for the model side is :assistant; :agent is
+        ;; the persisted spelling.
+        last-agent (last (filter #(#{:agent :assistant} (:role %)) msgs))]
+    (str/join "\n" (keep (fn [b] (when (= :text (:type b)) (:text b)))
+                          (:content last-agent)))))
+
 (defn- post-turn-hooks
-  "Tell every registered webhook the turn ended. Fire and forget: a hook that
-  is slow or gone must not hold the turn open, which is why this runs on its
-  own thread with a short timeout."
+  "Tell every registered webhook the turn ended, and run the user's end-of-turn
+  hook. Fire and forget: a hook that is slow or gone must not hold the turn
+  open, which is why this runs on its own thread with a short timeout."
   [conv status]
+  (hooks/end-of-turn-hook
+   {:type "agent_done"
+    :conversation_id (:id conv)
+    :timestamp (http-util/now-iso)
+    :hostname (or (System/getenv "HOSTNAME") "")
+    :model (:model conv)
+    :slug (:slug conv)
+    :final_response (final-text status)
+    :vm_name (or (System/getenv "EXE_VM_NAME") "")})
   (let [urls (:hooks (:options conv))]
     (when (seq urls)
       (future
@@ -307,9 +327,18 @@
                                  pending)))))
         result (try
                  (loop/run-turn {:model model
-                                 :system (cond-> [system-prompt
-                                                  (str "Working directory: " @(:cwd st))]
-                                           (not (str/blank? (str system-extra))) (conj (str system-extra)))
+                                 ;; The system prompt is offered to the user's
+                                 ;; system-prompt hook before the turn: it is the
+                                 ;; last word on what this agent is told. A hook
+                                 ;; that fails or returns nothing usable fails
+                                 ;; the turn — silently ignoring it would make
+                                 ;; the user think their prompt was applied.
+                                 :system [(hooks/system-prompt-hook
+                                           (str/join "\n\n"
+                                                     (cond-> [system-prompt
+                                                              (str "Working directory: " @(:cwd st))]
+                                                       (not (str/blank? (str system-extra)))
+                                                       (conj (str system-extra)))))]
                                  :messages history
                                  :tools tools
                                  :ctx ctx

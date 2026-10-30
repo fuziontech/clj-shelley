@@ -75,3 +75,60 @@
     (let [start (System/currentTimeMillis)]
       (hooks/end-of-turn-hook {})
       (is (< (- (System/currentTimeMillis) start) 8000)))))
+
+;; ---------------------------------------------------------------------------
+;; Slash commands
+;;
+;; A slash command is a hook the user invokes by typing it. The message never
+;; reaches the model unless the hook prints a replacement, so the parsing rules
+;; and the "hook exists means it owns the message" rule are the contract.
+
+(defn- install-slash! [command script]
+  (let [d (io/file dir "slash")]
+    (.mkdirs d)
+    (let [f (io/file d command)]
+      (spit f (str "#!/bin/bash\n" script "\n"))
+      (.setExecutable f true)
+      f)))
+
+(deftest parse-slash-rules
+  (is (= {:command "deploy" :args "now please" :raw "/deploy now please"}
+         (hooks/parse-slash "/deploy now please")))
+  (is (= "deploy" (:command (hooks/parse-slash "/deploy"))))
+  (is (= "" (:args (hooks/parse-slash "/deploy"))))
+  (testing "leading whitespace is tolerated, as upstream does"
+    (is (= "x" (:command (hooks/parse-slash "   /x")))))
+  (testing "not a command"
+    (is (nil? (hooks/parse-slash "hello")))
+    (is (nil? (hooks/parse-slash "/usr/bin/ls")))
+    (is (nil? (hooks/parse-slash "/")))))
+
+(deftest slash-without-a-hook-is-not-handled
+  (is (nil? (hooks/slash-command-hook {:message "/nosuchcommand"}))))
+
+(deftest a-slash-hook-owns-its-message
+  (install-slash! "deploy" "echo \"deploying $SHELLEY_SLASH_ARGS\"")
+  (testing "stdout replaces the message"
+    (let [r (hooks/slash-command-hook {:message "/deploy prod"})]
+      (is (:handled? r))
+      (is (= "deploying prod\n" (:message r)))
+      (is (= "deploy" (:command r)))))
+  (testing "silence consumes the message: no turn runs"
+    (install-slash! "deploy" "true")
+    (let [r (hooks/slash-command-hook {:message "/deploy prod"})]
+      (is (:handled? r))
+      (is (str/blank? (:message r)))))
+  (testing "a failing command is an error, not a fall-through to the model"
+    (install-slash! "deploy" "exit 3")
+    (let [r (hooks/slash-command-hook {:message "/deploy"})]
+      (is (:handled? r))
+      (is (string? (:error r))))))
+
+(deftest slash-command-gets-its-arguments
+  (install-slash! "args" "echo \"$SHELLEY_SLASH_COMMAND|$SHELLEY_SLASH_ARGS\"")
+  (testing "stdout is the message verbatim, trailing newline and all, as upstream does"
+    (is (= "args|one two  three\n"
+           (:message (hooks/slash-command-hook {:message "/args one two  three"}))))
+    (testing "arguments keep their internal spacing"
+      (is (str/starts-with? (:message (hooks/slash-command-hook {:message "/args a  b"}))
+                            "args|a  b")))))

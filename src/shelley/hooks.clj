@@ -57,13 +57,20 @@
 
 (defn run-hook
   "Run `name` with `input` on stdin. Returns {:ok true :out s} or
-  {:ok false :error s}. Never throws."
-  [name input]
-  (if-not (available? name)
-    {:ok true :skipped true}
-    (try
+  {:ok false :error s}. Never throws.
+
+  opts: :env (extra environment variables), :cwd, :timeout-seconds.
+
+  Slash-command hooks get their arguments in the environment as well as on
+  stdin, because a shell script is much easier to write that way."
+  ([name input] (run-hook name input nil))
+  ([name input {:keys [env cwd timeout-seconds]}]
+   (if-not (available? name)
+     {:ok true :skipped true}
+     (try
       (let [pb (ProcessBuilder. [(.getAbsolutePath (hook-file name))])
-            _ (.directory pb (io/file (System/getProperty "user.dir")))
+            _ (.directory pb (io/file (or (not-empty (str cwd)) (System/getProperty "user.dir"))))
+            _ (when (seq env) (.putAll (.environment pb) ^java.util.Map (into {} env)))
             p (.start pb)
             ;; Capture the pipes before the hook can exit: once the process is
             ;; reaped its streams are closed, and a fast hook hits that race.
@@ -72,14 +79,14 @@
             out (future (slurp in))
             err (future (slurp errs))]
         (write-input! p input)
-        (let [done (.waitFor p *timeout-seconds* TimeUnit/SECONDS)]
+        (let [done (.waitFor p (or timeout-seconds *timeout-seconds*) TimeUnit/SECONDS)]
           (cond
             (not done) (do (.destroyForcibly p) {:ok false :error (str name " hook timed out")})
             (zero? (.exitValue p)) {:ok true :out @out}
             :else {:ok false
                    :error (str name " hook exited " (.exitValue p) ": " (str/trim (str @err)))})))
       (catch Exception e
-        {:ok false :error (str name " hook failed: " (.getMessage e))}))))
+        {:ok false :error (str name " hook failed: " (.getMessage e))})))))
 
 (defn- run-json-hook
   "Round-trip a hook through JSON. Returns the parsed map the hook produced, or
@@ -148,3 +155,72 @@
           (json/parse-string out true)
           (catch Exception e
             {:error (str "status-bar hook returned invalid JSON: " (.getMessage e))}))))))
+
+;; ---------------------------------------------------------------------------
+;; Slash commands
+;;
+;; A message whose first token is `/something` runs `hooks/slash/something` if
+;; such a file exists. The hook either replaces the message with its stdout, or
+;; handles it entirely by printing nothing — in which case no turn runs. This is
+;; how a user adds a command that never reaches the model at all.
+
+(def ^:private slash-name-pattern #"^[a-zA-Z0-9_][a-zA-Z0-9_-]*$")
+
+(defn parse-slash
+  "Split `/cmd some args` into {:command :args}, or nil when the message is not
+  a slash command. A message like `/usr/bin/ls` is not a command: the name may
+  not contain a slash."
+  [message]
+  (let [m (str/replace (str message) #"^[ \t\r\n]+" "")]
+    (when (str/starts-with? m "/")
+      (let [rest (subs m 1)
+            [cmd args] (let [i (first (keep-indexed (fn [i c] (when (re-find #"\s" (str c)) i))
+                                                   rest))]
+                         (if i [(subs rest 0 i) (str/replace (subs rest i) #"^[ \t\r\n]+" "")]
+                             [rest ""]))]
+        (when (re-matches slash-name-pattern cmd)
+          {:command cmd :args args :raw (str message)})))))
+
+(defn slash-commands
+  "The slash commands this machine has hooks for."
+  []
+  (let [dir (io/file hooks-dir "slash")]
+    (if (.isDirectory dir)
+      (->> (.listFiles dir) (filter #(.isFile ^java.io.File %))
+           (map #(.getName ^java.io.File %)) sort vec)
+      [])))
+
+(defn slash-command-hook
+  "Run the hook for a slash command. Returns:
+
+    nil                             — not a slash command, or no hook for it
+    {:handled? true :message text}   — handled; an empty text means the message
+                                       is consumed and no turn should run
+    {:handled? true :error text}     — the hook exists and failed
+
+  A hook that exists is authoritative: a failure is reported rather than
+  silently falling through to the model, because the user asked for a command
+  that specifically does not go to the model."
+  [{:keys [message conversation-id is-new-conversation cwd model user-email]}]
+  (when-let [{:keys [command args raw]} (parse-slash message)]
+    (let [name (str "slash/" command)]
+      (when (available? name)
+        (let [payload {:command command
+                       :args args
+                       :raw_message raw
+                       :conversation_id conversation-id
+                       :is_new_conversation (boolean is-new-conversation)
+                       :cwd cwd
+                       :model model
+                       :user_email user-email}
+              env {"SHELLEY_SLASH_COMMAND" command
+                   "SHELLEY_SLASH_ARGS" (str args)
+                   "SHELLEY_CONVERSATION_ID" (str conversation-id)
+                   "SHELLEY_CWD" (str cwd)
+                   "SHELLEY_MODEL" (str model)
+                   "SHELLEY_USER_EMAIL" (str user-email)}
+              {:keys [ok out error]} (run-hook name (json/generate-string payload)
+                                               {:env env :cwd cwd})]
+          (if ok
+            {:handled? true :message (str out) :command command}
+            {:handled? true :error (str "/" command ": " error)}))))))

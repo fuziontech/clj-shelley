@@ -12,12 +12,14 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [shelley.compact :as compact]
+            [shelley.hooks :as user-hooks]
             [shelley.db :as db]
             [shelley.server.http :as http]
             [shelley.server.models :as models]
             [shelley.server.btw-api :as btw-api]
             [shelley.server.rows :as rows]
             [shelley.server.runtime :as runtime]
+            [clojure.tools.logging :as log]
             [shelley.server.sse :as sse]
             [shelley.tools :as tools]
             [shelley.tools.message-user :as message-user])
@@ -28,6 +30,11 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Shared helpers
+
+;; Defined below their first use: a hook is consulted while creating a
+;; conversation, and the helpers live next to the chat handlers.
+(declare message-hooks hook-headers)
+
 
 (defn- path-conv [req]
   (db/get-conversation (http/path-param req :id)))
@@ -192,17 +199,52 @@
         model (or (:model body) (:model opts) (models/default-model-id))]
     (if (and cwd (not (valid-dir? cwd)))
       (throw (ex-info (str "not a directory: " cwd) {:type :bad-request}))
-      (let [conv (if draft?
+      (let [conv (try (if draft?
                    (db/create-draft-conversation! {:draft (or (:draft body) (:message body) "")
                                                    :cwd cwd :model model :options opts})
                    (db/create-conversation! {:model model
                                              :cwd cwd
                                              :options opts
                                              :title (:title body)
-                                             :slug (:slug body)}))]
+                                             :slug (:slug body)}))
+                 ;; A slug a hook asked for may already be taken. That is not a
+                 ;; client error — upstream falls back to its own slug, and a
+                 ;; 500 here would make the hook unusable more than once.
+                 (catch Exception e
+                   (if (and (:slug-taken (ex-data e)) (:slug body))
+                     (do (log/info "slug" (:slug body) "already taken; generating one")
+                         (db/create-conversation! {:model model
+                                                   :cwd cwd
+                                                   :options opts
+                                                   :title (:title body)}))
+                     (throw e))))]
         (runtime/conv-state (:id conv))
         (notify!)
         conv))))
+
+(defn- new-conversation-hook
+  "Let the user's new-conversation hook shape a conversation before it exists:
+  it may rewrite the first prompt, the model, the working directory, and the
+  slug. Anything else it returns is ignored, as documented upstream."
+  [body req]
+  (if-not (user-hooks/available? "new-conversation")
+    body
+    (let [prompt (str (or (:message body) (:text body) (:content body) ""))
+          in {:prompt prompt
+              :model (:model body)
+              :cwd (:cwd body)
+              :readonly {:conversation_id ""
+                         :is_subagent false
+                         :headers (hook-headers req)}}
+          out (try (user-hooks/new-conversation-hook in)
+                   (catch Exception e
+                     (throw (ex-info (str "new-conversation hook: " (.getMessage e))
+                                     {:type :bad-request}))))]
+      (cond-> body
+        (not-empty (str (:prompt out))) (assoc :message (str (:prompt out)))
+        (not-empty (str (:model out))) (assoc :model (str (:model out)))
+        (not-empty (str (:cwd out))) (assoc :cwd (str (:cwd out)))
+        (not-empty (str (:slug out))) (assoc :slug (str (:slug out)))))))
 
 (defn handler-new
   "POST /api/conversations/new — create and, if a message came with it, start
@@ -210,12 +252,30 @@
   stream."
   [req]
   (let [body (http/parse-body req)
+        raw (or (:message body) (:text body) (:content body))
+        ;; A slash command is the user's own command line: it is read from the
+        ;; raw message, before any hook has had a chance to rewrite it.
+        slash (when (and raw (not (str/blank? (str raw))))
+                (user-hooks/slash-command-hook {:message (str raw) :is-new-conversation true
+                                                :cwd (:cwd body) :model (:model body)}))
+        body (if slash body (new-conversation-hook body req))
         message (or (:message body) (:text body) (:content body))]
     (if (and message (str/blank? (str message)))
       (http/bad-request "message must not be blank")
       (let [conv (create! body)]
         (when (and message (not (str/blank? (str message))))
-          (runtime/start-turn! conv (str message) (run-opts conv)))
+          (let [hooked (cond
+                         (nil? slash) (message-hooks conv (str message)
+                                                     {:is-new? true :headers (hook-headers req)})
+                         (:error slash) {:action :error :error (:error slash)}
+                         (str/blank? (str (:message slash)))
+                         {:action :drop :command (:command slash)}
+                         :else {:action :send :text (str (:message slash))})]
+            (case (:action hooked)
+              :error (log/warn "a hook refused the first message:" (:error hooked))
+              :drop (log/info "slash command handled the first message; no turn started")
+              :send (when-let [t (:text hooked)]
+                      (runtime/start-turn! conv t (run-opts conv))))))
         (http/created (conversation-json (db/get-conversation (:id conv))))))))
 
 (defn handler-draft
@@ -281,6 +341,57 @@
 ;; ---------------------------------------------------------------------------
 ;; Talking
 
+(def ^:private secret-headers
+  "Headers a user hook must never see. Hooks are scripts on the filesystem; the
+  session cookie is not their business."
+  #{"cookie" "set-cookie" "authorization" "proxy-authorization"})
+
+(defn- hook-headers
+  "Request headers as sorted [name value] pairs, minus the ones carrying secrets."
+  [req]
+  (->> (:headers req)
+       (remove (fn [[k _]] (secret-headers (str/lower-case (name k)))))
+       (mapcat (fn [[k v]] (for [one (if (sequential? v) v [v])] [(name k) (str one)])))
+       (sort-by first)
+       vec))
+
+(defn- message-hooks
+  "Run the user's hooks over an incoming user message.
+
+  Two hooks sit between the client and the model. A slash command that has a
+  hook file owns the message: its output replaces it, and no output means the
+  turn does not run at all. The chat-message hook may rewrite the text. Returns
+  {:action :drop}, {:action :send :text t} or {:action :error msg}.
+
+  The first message of a conversation goes through the new-conversation hook
+  instead, which is why `is-new?` is passed down rather than guessed."
+  [conv text {:keys [is-new? queued? headers]}]
+  (let [ctx {:conversation-id (:id conv)
+             :is-new-conversation is-new?
+             :cwd (:cwd conv)
+             :model (:model conv)}]
+    ;; A conversation's first message is the new-conversation hook's business,
+    ;; not chat-message's — the two would otherwise both rewrite it.
+    (if-let [slash (user-hooks/slash-command-hook (assoc ctx :message text))]
+      (cond
+        (:error slash) {:action :error :error (:error slash)}
+        (str/blank? (str (:message slash))) {:action :drop :command (:command slash)}
+        :else {:action :send :text (str (:message slash))})
+      (if is-new?
+        {:action :send :text text}
+        (try
+        (let [out (user-hooks/chat-message-hook
+                   {:message text
+                    :readonly {:conversation_id (:id conv)
+                               :model (:model conv)
+                               :queued (boolean queued?)
+                               :headers (or headers [])}})]
+          {:action :send :text (str (or (:message out) text))})
+        (catch Exception e
+          ;; A broken hook is the user's own script: say so, and do not send a
+          ;; message they did not write.
+          {:action :error :error (.getMessage e)}))))))
+
 (defn handler-chat
   "POST /api/conversation/:id/chat — `{message}`.
 
@@ -307,14 +418,26 @@
                                                      (normalise-options (:conversation_options body))))
                 conv (db/get-conversation (:id conv))
                 text (str message)]
-            (if (runtime/running? (:id conv))
-              (let [entry (runtime/enqueue! (:id conv) text)]
-                (http/accepted {"status" "queued"
-                                "message" text
-                                "queued_id" (:id entry)}))
-              (do (runtime/start-turn! conv text (run-opts conv))
-                  (notify!)
-                  (http/accepted {"status" "accepted" "message" text})))))))))
+            ;; Slash commands and the chat-message hook run here, on the way in,
+            ;; so what the model and the transcript see is the final text.
+            (let [hooked (message-hooks conv text {:is-new? false
+                                                   :queued? (runtime/running? (:id conv))
+                                                   :headers (hook-headers req)})]
+              (case (:action hooked)
+                :error (http/bad-request (:error hooked))
+                :drop (http/ok {"status" "handled"
+                                "command" (:command hooked)
+                                "message" ""})
+                :send
+                (let [text (:text hooked)]
+                  (if (runtime/running? (:id conv))
+                    (let [entry (runtime/enqueue! (:id conv) text)]
+                      (http/accepted {"status" "queued"
+                                      "message" text
+                                      "queued_id" (:id entry)}))
+                    (do (runtime/start-turn! conv text (run-opts conv))
+                        (notify!)
+                        (http/accepted {"status" "accepted" "message" text}))))))))))))
 
 (defn handler-cancel
   "POST /api/conversation/:id/cancel — stop the running turn at the next check."
