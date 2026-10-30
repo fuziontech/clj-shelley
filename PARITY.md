@@ -29,7 +29,7 @@ wins — and the row is a bug.
 | --- | --- | --- |
 | Anthropic messages | `llm/ant` | done |
 | OpenAI chat completions | `llm/oai` | done |
-| OpenAI Responses API | `llm/oai` | todo |
+| OpenAI Responses API | `llm/oai` | `llm/openai_responses.clj` — needed, not optional: reasoning models refuse tools on chat completions |
 | Gemini | `llm/gem` | done |
 | Deterministic test provider | `llm/predictable` | done (`fixture`) |
 | Thinking levels | `ThinkingLevel` | done |

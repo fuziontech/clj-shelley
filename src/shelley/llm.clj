@@ -202,7 +202,12 @@
   (fn [request _on-event] (provider-for (:model request))))
 
 (defmethod send-request :openai [request on-event]
-  ((requiring-resolve 'shelley.llm.openai/send-request) request on-event))
+  ;; Reasoning models (gpt-5/6, o-series) refuse function tools on
+  ;; /v1/chat/completions; /v1/responses is the endpoint where they can both
+  ;; think and call. The chat-completions adapter stays for the rest.
+  (if ((requiring-resolve 'shelley.llm.openai-responses/reasoning-model?) (:model request))
+    ((requiring-resolve 'shelley.llm.openai-responses/send-request) request on-event)
+    ((requiring-resolve 'shelley.llm.openai/send-request) request on-event)))
 
 (defmethod send-request :anthropic [request on-event]
   ((requiring-resolve 'shelley.llm.anthropic/send-request) request on-event))
